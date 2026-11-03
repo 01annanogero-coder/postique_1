@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
+  <rect width="1200" height="800" fill="#B6563E"/>
+  <circle cx="1050" cy="130" r="250" fill="#C06A52"/>
+  <rect x="150" y="310" width="430" height="330" rx="6" fill="#D8C8AF"/>
+  <path d="M150 310l120-105h430l-120 105H150Z" fill="#E7DAC5"/>
+  <path d="M580 310l120-105v330l-120 105V310Z" fill="#BFA98D"/>
+  <rect x="312" y="380" width="164" height="90" rx="4" fill="#F6F1E6"/>
+  <text x="330" y="414" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="2" fill="#171B17">ACME</text>
+  <text x="330" y="440" font-family="Helvetica, Arial, sans-serif" font-size="9" letter-spacing="1.4" fill="#6E7568">FRAGILE · NAIROBI</text>
+  <rect x="500" y="310" width="36" height="435" fill="#C6F26B" opacity="0.95"/>
+  <text x="720" y="390" font-family="Georgia, serif" font-style="italic" font-size="76" fill="#F4ECDD">Packed with</text>
+  <text x="720" y="472" font-family="Georgia, serif" font-style="italic" font-size="76" fill="#F4ECDD">care.</text>
+  <text x="724" y="528" font-family="Helvetica, Arial, sans-serif" font-size="15" letter-spacing="1.5" fill="#ECD9C9">Recycled materials. Reusable boxes.</text>
+  <text x="64" y="748" font-family="Helvetica, Arial, sans-serif" font-size="11" letter-spacing="3" fill="#E8CFC2">ACME STUDIO · 14 RIVERSIDE DRIVE</text>
+</svg>

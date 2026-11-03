@@ -1,0 +1,12 @@
+node_modules
+dist
+data
+.test-data
+.*-test-data
+.git
+.gitignore
+.qa
+preview
+*.png
+*.log
+.env

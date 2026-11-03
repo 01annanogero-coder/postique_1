@@ -1,0 +1,54 @@
+{
+  "name": "postique-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Postique — self-hosted email infrastructure for applications.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c green,cyan \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "node --watch server/index.js",
+    "dev:web": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "start": "cross-env NODE_ENV=production node server/index.js",
+    "worker": "node server/worker.js",
+    "adapter": "node adapter/server.mjs",
+    "password:reset": "node server/scripts/reset-password.js",
+    "test": "node --test",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@fontsource-variable/manrope": "^5.3.0",
+    "@fontsource/instrument-serif": "^5.3.0",
+    "cheerio": "^1.2.0",
+    "compression": "^1.8.2",
+    "cookie-parser": "^1.4.7",
+    "cross-env": "^10.1.0",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.3",
+    "file-type": "^22.3.0",
+    "handlebars": "^4.7.10",
+    "helmet": "^8.3.0",
+    "html-to-text": "^10.0.1",
+    "lucide-react": "^0.468.0",
+    "mailparser": "^3.14.1",
+    "mjml": "^5.4.1",
+    "mjml-browser": "^5.4.1",
+    "multer": "^2.5.0",
+    "nodemailer": "^10.3.1",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "sanitize-html": "^2.18.1",
+    "smtp-server": "^3.21.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.2.1",
+    "concurrently": "^10.0.6",
+    "vite": "^8.3.5"
+  }
+}

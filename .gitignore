@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data/
+.test-data/
+.*-test-data/
+.npm-cache/
+.chrome-profile/
+.qa/
+qa-*.png
+.env
+.env.*
+!.env.example
+*.local
+*.log

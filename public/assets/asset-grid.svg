@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900">
+  <rect width="1200" height="900" fill="#20241F"/>
+  <text x="62" y="88" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="4" fill="#AAB0A1">THE EVERYDAY SET</text>
+  <text x="62" y="147" font-family="Georgia, serif" font-style="italic" font-size="58" fill="#F4F0E6">Made for the table.</text>
+  <rect x="62" y="218" width="506" height="580" rx="10" fill="#D9CFBC"/>
+  <rect x="592" y="218" width="546" height="274" rx="10" fill="#B65C42"/>
+  <rect x="592" y="516" width="250" height="282" rx="10" fill="#8B9A78"/>
+  <rect x="866" y="516" width="272" height="282" rx="10" fill="#E9E0CF"/>
+  <ellipse cx="315" cy="470" rx="170" ry="76" fill="#F4EDE0"/>
+  <path d="M171 470c0-44 63-80 144-80s144 36 144 80v34c0 69-64 125-144 125s-144-56-144-125v-34Z" fill="#C9B89D"/>
+  <ellipse cx="315" cy="470" rx="144" ry="64" fill="#F4EDE0"/>
+  <ellipse cx="315" cy="470" rx="112" ry="44" fill="#E4D6C1"/>
+  <circle cx="855" cy="355" r="88" fill="#DDD2BE"/>
+  <circle cx="855" cy="355" r="55" fill="#F0E8DA"/>
+  <path d="M752 760c0-72 47-130 105-130s105 58 105 130" fill="#E9E0CF"/>
+  <rect x="936" y="646" width="110" height="132" rx="8" fill="#D3C4AE"/>
+  <text x="62" y="852" font-family="Helvetica, Arial, sans-serif" font-size="13" letter-spacing="3" fill="#7C8475">ACME.CO.KE · SHOP THE SET</text>
+</svg>

@@ -1,0 +1,37 @@
+services:
+  postique:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      # Point this at 25 on a public host if you want to receive internet mail directly.
+      - "2525:2525"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      DATA_DIR: /data
+      INBOUND_SMTP_ENABLED: "true"
+      INBOUND_SMTP_HOST: 0.0.0.0
+      INBOUND_SMTP_PORT: 2525
+    volumes:
+      - postique-data:/data
+
+  mail-gateway:
+    build: .
+    command: ["node", "adapter/server.mjs"]
+    profiles: ["mail-gateway"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: 8787
+      ADAPTER_TOKEN: ${MAIL_ADAPTER_TOKEN}
+      SMTP_URL: ${SMTP_URL}
+    ports:
+      - "8787:8787"
+
+volumes:
+  postique-data:
