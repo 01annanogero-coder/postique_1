@@ -40,6 +40,7 @@ export function createOutboundMessage({
   attachments = [],
   campaignId = null,
   campaignRecipientId = null,
+  headers = {},
 }) {
   const db = getDb()
   const thread = threadId ? db.prepare('SELECT * FROM threads WHERE id = ? AND workspace_id = ?').get(threadId, workspaceId) : null
@@ -60,7 +61,7 @@ export function createOutboundMessage({
       (id, workspace_id, thread_id, direction, author_type, message_id, in_reply_to, references_json,
        from_email, from_name, to_json, cc_json, bcc_json, subject, html, text, status,
        template_version_id, api_key_id, headers_json, is_test, created_at, campaign_id, campaign_recipient_id)
-     VALUES (?, ?, ?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, '{}', ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     workspaceId,
@@ -79,6 +80,7 @@ export function createOutboundMessage({
     text || null,
     templateVersionId,
     apiKeyId,
+    JSON.stringify(headers && typeof headers === 'object' ? headers : {}),
     isTest ? 1 : 0,
     createdAt,
     campaignId,

@@ -196,6 +196,7 @@ export async function deliverMessage(messageId) {
   const html = message.html || `<p>${String(message.text || '').replaceAll('\n', '<br>')}</p>`
   const text = message.text || htmlToText(html)
   const headers = {
+    ...parseJson(message.headers_json, {}),
     'X-Postique-Thread': message.thread_id || '',
     'X-Postique-Message': message.id,
     'X-Postique-Workspace': message.workspace_id,

@@ -18,6 +18,7 @@ import { dashboardRouter } from './routes/dashboard.js'
 import { publicApiRouter } from './routes/public-api.js'
 import { processEmail } from './lib/inbound.js'
 import { bootstrap } from './lib/bootstrap.js'
+import { unsubscribeRecipient } from './lib/unsubscribe.js'
 
 export const app = express()
 
@@ -102,6 +103,19 @@ app.post(
 
 app.use(express.json({ limit: '15mb' }))
 app.use(express.urlencoded({ extended: false }))
+
+app.all('/unsubscribe/:id', (req, res) => {
+  try {
+    unsubscribeRecipient(req.params.id, req.query.token || req.body?.token)
+    res.status(200).type('html').send(
+      '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Unsubscribed</title></head><body style="margin:0;background:#f3f0e8;font-family:system-ui,sans-serif;color:#20251f"><main style="max-width:480px;margin:12vh auto;background:#fffefa;border:1px solid #e2ddd1;border-radius:14px;padding:32px"><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8e9588">Postique</div><h1 style="font-size:26px;margin:12px 0 8px">You are unsubscribed</h1><p style="font-size:14px;line-height:1.65;color:#687262">This address will not receive further campaign email from this workspace.</p></main></body></html>',
+    )
+  } catch (error) {
+    res.status(error.status || 400).type('html').send(
+      `<!doctype html><html><body style="font-family:system-ui;padding:40px"><h1>Unsubscribe link invalid</h1><p>${String(error.message).replaceAll('<', '&lt;')}</p></body></html>`,
+    )
+  }
+})
 
 app.use('/api/auth', authRouter)
 app.use('/auth/v1', authApiRouter)

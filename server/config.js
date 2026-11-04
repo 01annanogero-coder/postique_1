@@ -125,7 +125,7 @@ export const config = {
   worker: {
     enabled: bool(process.env.WORKER_ENABLED, true),
     intervalMs: number(process.env.WORKER_INTERVAL_MS, 1000),
-    concurrency: 1,
+    concurrency: Math.max(1, number(process.env.WORKER_CONCURRENCY, 1)),
   },
   dns: {
     verificationEnabled: bool(process.env.DNS_VERIFICATION_ENABLED, true),

@@ -88,6 +88,22 @@ After changing `.env`, restart Postique.
 7. Create a secret API key in **Developers**.
 8. Send a test through the API or the Studio. The queue and worker handle delivery.
 
+## Use your own domain
+
+Nothing in the runtime requires `postique.fyi`. The domain in the marketing content and demo screenshots is branding/sample data only.
+
+When you clone the repository, set:
+
+```env
+APP_URL=https://mail.yourdomain.com
+INBOUND_DOMAIN=in.yourdomain.com
+MAIL_FROM_DOMAIN=yourdomain.com
+```
+
+Then add `yourdomain.com` under **Domains**, choose a delivery route, and publish its DNS records. Another installation can use `postique.com`, `example.org`, or a private domain without changing code.
+
+The test suite uses synthetic `.test` addresses and the file outbox, so it does not require any public domain, DNS record or real SMTP server.
+
 ## Configuration
 
 Copy `.env.example` to `.env`. The important values:
@@ -95,6 +111,7 @@ Copy `.env.example` to `.env`. The important values:
 | Variable | Purpose |
 | --- | --- |
 | `APP_URL` | Public base URL. Used in links, media URLs and cookie security. |
+| `MAIL_FROM_DOMAIN` | Sending-domain fallback for service email; set to your own domain. |
 | `PORT` | HTTP API/dashboard port (default `3000`). |
 | `DATA_DIR` | SQLite database, assets, attachments, outbox and generated app secret. |
 | `APP_SECRET` | Optional explicit secret. If omitted, generated at `DATA_DIR/.app-secret`. |
@@ -114,6 +131,7 @@ Copy `.env.example` to `.env`. The important values:
 | `SEND_LIMIT_PER_HOUR` / `MONTHLY_SEND_LIMIT` | Local sending limits. |
 | `ALLOW_PRIVATE_WEBHOOKS` | Allow webhooks to private/LAN addresses. Keep `false` on public servers. |
 | `WORKER_ENABLED` | Run the send/retry/webhook worker inside the API process. |
+| `WORKER_CONCURRENCY` | Jobs processed concurrently per worker process (default `1`). |
 | `AUTH_ACCESS_TOKEN_TTL` | Application JWT lifetime in seconds (default `3600`). |
 | `AUTH_REFRESH_TOKEN_DAYS` | Application refresh-session lifetime (default `30`). |
 | `AUTH_MAGIC_LINK_MINUTES` / `AUTH_OTP_MINUTES` | Magic-link and email-code expiry. |
@@ -274,6 +292,7 @@ The campaign engine is designed for developers who keep their own user database.
 - Recipients are processed in batches through the existing queue and per-domain delivery routes.
 - Each recipient gets a real message record, retry behavior and delivery event.
 - Campaigns can be started, paused, resumed and cancelled.
+- Campaign messages include a signed unsubscribe link and `List-Unsubscribe` headers by default. The `/unsubscribe/:id?token=...` endpoint adds the address to the workspace suppression list. Set `"options": { "unsubscribe": false }` only for messages where unsubscribe is not appropriate, such as legal notices.
 
 Create a draft:
 

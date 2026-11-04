@@ -6,7 +6,8 @@ import { SendError, deliverMessage } from './mailer.js'
 import { deliverWebhook, enqueueWebhookEvent } from './webhooks.js'
 
 let timer = null
-let running = false
+let active = 0
+let ticking = false
 let stopped = false
 
 export function enqueue(type, payload, { runAt = nowIso(), maxAttempts = 5 } = {}) {
@@ -85,8 +86,8 @@ async function runJob(job) {
 }
 
 async function processNext() {
-  if (running || stopped) return
-  running = true
+  if (stopped || active >= config.worker.concurrency) return
+  active += 1
   const db = getDb()
   try {
     const job = db
@@ -123,17 +124,21 @@ async function processNext() {
       }
     }
   } finally {
-    running = false
+    active = Math.max(0, active - 1)
   }
 }
 
 async function tick() {
-  if (stopped) return
-  for (let index = 0; index < config.worker.concurrency; index += 1) {
-    // Jobs are processed serially in a local single-process deployment. The
-    // loop allows the event loop to flush between jobs.
-    // eslint-disable-next-line no-await-in-loop
-    await processNext()
+  if (stopped || ticking) return
+  ticking = true
+  try {
+    const runners = []
+    for (let index = 0; index < config.worker.concurrency; index += 1) {
+      runners.push(processNext())
+    }
+    await Promise.all(runners)
+  } finally {
+    ticking = false
   }
 }
 
@@ -157,7 +162,7 @@ export function startWorker() {
   }, config.worker.intervalMs)
   timer.unref?.()
   kick()
-  logger.info({ intervalMs: config.worker.intervalMs }, 'Background worker started')
+  logger.info({ intervalMs: config.worker.intervalMs, concurrency: config.worker.concurrency }, 'Background worker started')
 }
 
 export function stopWorker() {

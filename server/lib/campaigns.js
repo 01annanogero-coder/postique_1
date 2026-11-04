@@ -6,6 +6,7 @@ import { logger } from './logger.js'
 import { createOutboundMessage } from './messages.js'
 import { compileMjml, htmlToText, renderSubject } from './templates.js'
 import { enqueue } from './queue.js'
+import { unsubscribeUrl } from './unsubscribe.js'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const ACTIVE = ['draft', 'running', 'paused']
@@ -64,6 +65,7 @@ export function campaignView(campaign) {
     sent: byStatus.sent || 0,
     failed: byStatus.failed || 0,
     suppressed: byStatus.suppressed || 0,
+    unsubscribed: byStatus.unsubscribed || 0,
     createdAt: campaign.created_at,
     updatedAt: campaign.updated_at,
     startedAt: campaign.started_at,
@@ -279,15 +281,24 @@ export async function processCampaignBatch(campaignId) {
     }
     try {
       const stored = parseJson(recipient.variables_json, {})
+      const options = parseJson(campaign.options_json, {})
+      const unsubscribe = options.unsubscribe === false ? '' : unsubscribeUrl(recipient.id, campaign.id)
       const variables = {
-        ...parseJson(campaign.options_json, {}),
+        ...options,
         ...stored,
         email: recipient.email,
         name: recipient.name,
         external_user_id: recipient.external_user_id || '',
         campaign: campaign.name,
+        unsubscribe_url: unsubscribe,
       }
       const compiled = await compileMjml(version.mjml, variables)
+      const headers = unsubscribe
+        ? {
+            'List-Unsubscribe': `<${unsubscribe}>`,
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+          }
+        : {}
       const message = createOutboundMessage({
         workspaceId: campaign.workspace_id,
         threadId: null,
@@ -300,6 +311,7 @@ export async function processCampaignBatch(campaignId) {
         authorType: 'campaign',
         campaignId: campaign.id,
         campaignRecipientId: recipient.id,
+        headers,
       })
       db.prepare(
         "UPDATE campaign_recipients SET status = 'queued', message_id = ?, updated_at = ?, error = NULL WHERE id = ?",
