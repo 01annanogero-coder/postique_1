@@ -591,8 +591,8 @@ const modeContent = {
   embed: {
     eyebrow: '02 · Embeddable Inbox',
     title: 'Put the conversation inside your product.',
-    copy: 'A ready-made conversation widget is planned. The API can already power a custom interface inside your admin dashboard, order page or support surface, so your users never leave your app.',
-    bullets: ['Use the API to build a custom UI today', 'Server-side permissions and scoped keys', 'Drop-in widget on the roadmap'],
+    copy: 'Drop a themable conversation widget into your admin dashboard, order page or support surface. Your users never leave your app, and the workspace key never reaches the browser.',
+    bullets: ['User-scoped embed token', 'Light and dark themes', 'Or build completely custom with the API'],
     icon: <PanelRight size={16} />,
   },
   api: {
@@ -817,7 +817,7 @@ function ModesSection() {
               ))}
             </ul>
             <button className="text-link" onClick={() => navigate(mode === 'embed' ? '/app/embed' : mode === 'api' ? '/app/developers' : '/app/inbox')}>
-              {mode === 'embed' ? 'See the planned widget' : mode === 'api' ? 'See the developer docs' : 'Open the inbox'}
+              {mode === 'embed' ? 'Open the embedded inbox' : mode === 'api' ? 'See the developer docs' : 'Open the inbox'}
               <ArrowRight size={14} />
             </button>
           </div>

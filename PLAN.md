@@ -1,5 +1,7 @@
 # Postique - Email Studio (Annan Digital Labs)
 
+> Historical planning document. The current implementation is described in [README.md](README.md). Where this plan mentions Supabase, Cloudflare, Vercel or Amazon SES, those are no longer runtime dependencies; Postique is self-hosted with SQLite, local SMTP routing and an optional HTTP mail adapter.
+
 Status: planning. Date: 2026-11-02. Owner: Annan Ogero.
 Predecessor: `C:\Users\01Ann\Projects\mjml-app-master` (desktop prototype, personal tool).
 

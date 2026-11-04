@@ -1,3 +1,5 @@
+> Historical product narrative. The current self-hosted implementation is documented in [README.md](README.md). Supabase, Cloudflare, Vercel and Amazon SES are no longer runtime dependencies.
+
 # Meet Postique: Email infrastructure built around your application
 
 ## 1. What is Postique?
