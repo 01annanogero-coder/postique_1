@@ -14,7 +14,9 @@ There is no Supabase, Cloudflare, Amazon SES or other hosted service in the runt
 - **SQLite database**: schema migrations, WAL mode, foreign keys and a local data directory.
 - **Template Studio**: browser MJML editor, live preview, server-side MJML compilation, variables, test sends, draft/published versions.
 - **Sending API**: REST API, browser SDK, bearer API keys, public browser keys with origin/template restrictions, idempotency keys, attachments and usage limits.
-- **Application authentication**: workspace-scoped end-users, email/password signup, JWT access tokens, rotating refresh sessions, magic links, email OTP, recovery, user administration and a browser auth SDK.
+- **Ephemeral email verification**: developer-designed verification emails, single-use links, signed status checks and automatic purge — no user account created.
+- **BYOA campaigns**: developer-supplied recipient batches, template personalization, batching, progress, pause/resume and temporary retention.
+- **Optional application accounts**: workspace-scoped end-users, email/password signup, JWT access tokens, rotating refresh sessions, magic links, email OTP, recovery and a browser auth SDK.
 - **Embedded inbox**: a scoped external-user API plus a themable `<postique-inbox>` web component for one thread or a conversation list.
 - **Threading**: Message-ID, In-Reply-To and References headers; stable reply subjects; per-thread reply addresses.
 - **Inbound SMTP**: built-in listener that receives replies, parses MIME, stores attachments, matches threads and keeps unmatched messages for manual linking.
@@ -117,6 +119,11 @@ Copy `.env.example` to `.env`. The important values:
 | `AUTH_MAGIC_LINK_MINUTES` / `AUTH_OTP_MINUTES` | Magic-link and email-code expiry. |
 | `AUTH_DEBUG_LINKS` | Return generated magic links in local/development responses. Keep off on a public server. |
 | `EMBED_TOKEN_MINUTES` | Embedded inbox session lifetime (default `60`). |
+| `VERIFY_TOKEN_MINUTES` | Verification-link lifetime (default `30`). |
+| `VERIFY_RETENTION_HOURS` | How long verification records are retained (default `24`). |
+| `CAMPAIGN_BATCH_SIZE` | Recipients processed per campaign batch (default `50`). |
+| `CAMPAIGN_MAX_RECIPIENTS` | Per-campaign recipient cap (default `100000`). |
+| `CAMPAIGN_RETENTION_DAYS` | Recipient data retention (default `30`). |
 
 ### Delivery routes
 
@@ -194,6 +201,11 @@ Useful endpoints:
 | `GET` | `/v1/messages/:id` | Read a message (secret key). |
 | `POST` | `/v1/templates/:slug/render` | Render a published template without sending. |
 | `GET` | `/v1/me` | Identify the API key/workspace. |
+| `POST` | `/verify/v1/requests` | Create an ephemeral email verification. |
+| `GET` | `/verify/v1/requests/:id` | Check whether an email was verified. |
+| `POST` | `/v1/campaigns` | Create a BYOA campaign draft. |
+| `POST` | `/v1/campaigns/:id/recipients` | Append a recipient batch. |
+| `POST` | `/v1/campaigns/:id/start` | Start or resume campaign delivery. |
 
 Browser SDK: load `/sdk/postique.js` and use a **public** key. Public keys require allowed origins and at least one allowed published template.
 
@@ -211,9 +223,94 @@ Browser SDK: load `/sdk/postique.js` and use a **public** key. Public keys requi
 </script>
 ```
 
+## Email verification without accounts
+
+This is the lightweight ownership check. It does **not** create an `auth_users` row, a password, a session or a long-lived profile.
+
+![Ephemeral email verification](docs/verification.png)
+
+A developer creates a request with a secret key and a published Template Studio template:
+
+```bash
+curl -X POST https://mail.example.com/verify/v1/requests \
+  -H "Authorization: Bearer $POSTIQUE_SECRET_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "person@example.com",
+    "template": "verify-email",
+    "redirect_url": "https://app.example.com/verified",
+    "metadata": { "submission_id": "sub_123" }
+  }'
+```
+
+Template variables include `verify_url`, `email`, `name`, `workspace` and any metadata keys. The developer designs the email in Template Studio; a built-in fallback is used when no template is supplied.
+
+The recipient opens `/verify/v1/confirm?token=...`, which marks the request verified and redirects to the stored redirect URL with `verification_id` and `verification=success`. The backend confirms the result:
+
+```http
+GET /verify/v1/requests/vrf_...
+Authorization: Bearer pq_live_...
+```
+
+The verification record contains only the email, template choice, metadata and redirect. It is single-use, expires after 30 minutes, and is purged after 24 hours. Repeat submissions are allowed; there is no `user_exists` wall.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/verify/v1/requests` | Create an ephemeral verification request. |
+| `GET` | `/verify/v1/confirm?token=...` | Confirm from the email link. |
+| `GET` | `/verify/v1/requests/:id` | Check status with a secret key. |
+
+Use **Application accounts** only when you need persistent users, passwords, JWTs and refresh sessions.
+
+## BYOA campaigns
+
+The campaign engine is designed for developers who keep their own user database.
+
+![BYOA campaigns](docs/campaigns.png)
+
+- The developer pushes recipient batches to Postique.
+- Postique stores recipients only for the campaign retention window.
+- No permanent contacts database or user graph is required.
+- Recipients are processed in batches through the existing queue and per-domain delivery routes.
+- Each recipient gets a real message record, retry behavior and delivery event.
+- Campaigns can be started, paused, resumed and cancelled.
+
+Create a draft:
+
+```bash
+curl -X POST https://mail.example.com/v1/campaigns \
+  -H "Authorization: Bearer $POSTIQUE_SECRET_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Privacy policy update",
+    "template": "policy-update",
+    "recipients": [
+      { "email": "amara@example.com", "name": "Amara", "external_user_id": "user_123" },
+      { "email": "buyer@example.com", "name": "Buyer", "external_user_id": "user_456" }
+    ]
+  }'
+```
+
+Then `POST /v1/campaigns/:id/start`, or use **Campaigns** in the dashboard. The API also supports appending batches with `POST /v1/campaigns/:id/recipients`, so a large audience can be streamed in chunks rather than stored permanently.
+
+Current defaults are 50 recipients per batch and 100,000 recipients per campaign, configurable through `CAMPAIGN_*` environment variables. This is a single-node queue profile; for millions of messages per hour, replace SQLite with a distributed queue/database and run a worker fleet.
+
+### Scaling the queue
+
+The queue is durable and retry-safe, but the default storage is SQLite and the default worker is a single Node process. That is appropriate for self-hosted transactional mail and moderate campaigns.
+
+For higher throughput:
+
+1. Move the database to PostgreSQL and the job queue to Redis Streams, PostgreSQL `SKIP LOCKED`, SQS or Kafka.
+2. Run multiple `npm run worker` processes with `WORKER_ENABLED=false` on the API process.
+3. Add per-recipient-domain rate limiting and connection pooling at the worker layer.
+4. Split provider routes by domain/IP pool and monitor queue lag, deferrals and reputation.
+
+The application API and job payloads are designed to remain the same when the queue backend changes. AWS SES-scale delivery additionally requires an MTA fleet, IP reputation management, abuse handling and feedback loops — not just more workers.
+
 ## Application authentication
 
-Postique includes a separate identity layer for the users of your application. It is intentionally **not** the same account pool as the dashboard owner. Dashboard accounts still use the local session/CSRF system; application users get JWTs and refresh sessions.
+Postique also includes an optional application account pool. It is intentionally separate from the dashboard owner and from the ephemeral Verification API. Use it only when a product needs persistent users, passwords and sessions; otherwise use `/verify/v1`. Dashboard accounts still use the local session/CSRF system; application accounts get JWTs and refresh sessions.
 
 ![Authentication management](docs/authentication.png)
 

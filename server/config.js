@@ -81,6 +81,18 @@ export const config = {
     maxThreads: number(process.env.EMBED_MAX_THREADS, 50),
     maxAttachments: number(process.env.EMBED_MAX_ATTACHMENTS, 5),
   },
+  verification: {
+    tokenMinutes: number(process.env.VERIFY_TOKEN_MINUTES, 30),
+    retentionHours: number(process.env.VERIFY_RETENTION_HOURS, 24),
+    maxPerHour: number(process.env.VERIFY_MAX_PER_HOUR, 5),
+    debugLinks: bool(process.env.VERIFY_DEBUG_LINKS, process.env.NODE_ENV !== 'production'),
+  },
+  campaigns: {
+    batchSize: number(process.env.CAMPAIGN_BATCH_SIZE, 50),
+    maxRecipientsPerRequest: number(process.env.CAMPAIGN_MAX_RECIPIENTS_PER_REQUEST, 5000),
+    maxRecipients: number(process.env.CAMPAIGN_MAX_RECIPIENTS, 100000),
+    retentionDays: number(process.env.CAMPAIGN_RETENTION_DAYS, 30),
+  },
   inbound: {
     enabled: inboundEnabled,
     host: process.env.INBOUND_SMTP_HOST || '0.0.0.0',

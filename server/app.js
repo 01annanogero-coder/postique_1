@@ -13,6 +13,7 @@ import { ApiError } from './lib/http.js'
 import { authRouter } from './routes/auth.js'
 import { authApiRouter } from './routes/auth-api.js'
 import { embedApiRouter } from './routes/embed-api.js'
+import { verifyApiRouter } from './routes/verify-api.js'
 import { dashboardRouter } from './routes/dashboard.js'
 import { publicApiRouter } from './routes/public-api.js'
 import { processEmail } from './lib/inbound.js'
@@ -105,6 +106,7 @@ app.use(express.urlencoded({ extended: false }))
 app.use('/api/auth', authRouter)
 app.use('/auth/v1', authApiRouter)
 app.use('/embed/v1', embedApiRouter)
+app.use('/verify/v1', verifyApiRouter)
 app.use('/api', dashboardRouter)
 app.use('/v1', publicApiRouter)
 
@@ -181,6 +183,9 @@ app.use('/v1', (_req, res) => {
 })
 app.use('/embed/v1', (_req, res) => {
   res.status(404).json({ error: { code: 'not_found', message: 'Embed endpoint not found.' } })
+})
+app.use('/verify/v1', (_req, res) => {
+  res.status(404).json({ error: { code: 'not_found', message: 'Verification endpoint not found.' } })
 })
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: { code: 'not_found', message: 'API endpoint not found.' } })

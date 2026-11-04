@@ -180,11 +180,14 @@ await postique.auth.signInWithOtp({
   return (
     <div className="page page--auth-service">
       <PageHeader
-        eyebrow="Application identity"
-        title="Authentication"
-        description="A local, Supabase-style identity layer for the applications you build. Your users, your database, your signing keys."
+        eyebrow="Optional identity pool"
+        title="Application accounts"
+        description="Use this only when a product needs persistent users, passwords and sessions. For email ownership alone, use Verification."
         actions={
           <>
+            <Button variant="secondary" onClick={() => navigate('/app/verification')} icon={<Mail size={14} />}>
+              Verification
+            </Button>
             <Button variant="secondary" onClick={() => navigate('/app/developers')} icon={<KeyRound size={14} />}>
               API keys
             </Button>
@@ -200,10 +203,10 @@ await postique.auth.signInWithOtp({
           <LockKeyhole size={16} />
         </span>
         <div>
-          <strong>Dashboard accounts and application users are separate.</strong>
-          <p>Your workspace login stays in the existing Postique session system. This service issues JWTs and refresh sessions to your app’s own users.</p>
+          <strong>Accounts are optional. Verification is the lightweight path.</strong>
+          <p>This module stores users, password hashes and refresh sessions. If you only need to prove email ownership, use the ephemeral Verification API instead.</p>
         </div>
-        <Badge tone="success" dot>Local</Badge>
+        <Badge tone="warning">Stores users</Badge>
       </div>
 
       <div className="auth-stats">

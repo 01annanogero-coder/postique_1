@@ -1,40 +1,4 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import { config } from '../config.js'
-import { getDb } from '../db/index.js'
-import { decryptSecret, makeId } from './crypto.js'
-import { logger } from './logger.js'
-import { makeTransport } from './mailer.js'
-import { resolveMailRoute } from './mail-route.js'
-
-function authSender(workspaceId) {
-  const db = getDb()
-  const identity = db
-    .prepare('SELECT * FROM identities WHERE workspace_id = ? ORDER BY created_at ASC LIMIT 1')
-    .get(workspaceId)
-  if (identity) {
-    const domain = db.prepare('SELECT * FROM domains WHERE id = ?').get(identity.domain_id)
-    if (domain?.status === 'verified') {
-      return {
-        from: { name: identity.from_name || 'Postique', email: identity.from_email },
-        dkim: {
-          domainName: domain.name,
-          keySelector: domain.dkim_selector,
-          privateKey: decryptSecret(domain.dkim_private_enc),
-        },
-        route: resolveMailRoute(domain),
-      }
-    }
-  }
-  if (config.mail.transport === 'file') {
-    return {
-      from: { name: 'Postique', email: `no-reply@${config.mail.fromDomain}` },
-      dkim: null,
-      route: resolveMailRoute(null),
-    }
-  }
-  throw new Error('Add and verify a sending domain before sending authentication email.')
-}
+import { sendServiceEmail } from './service-mail.js'
 
 function escapeHtml(value) {
   return String(value || '')
@@ -77,33 +41,26 @@ function authHtml({ purpose, link, code, workspaceName }) {
 }
 
 export async function sendAuthEmail({ workspaceId, workspaceName, to, purpose = 'magiclink', link, code }) {
-  const { from, dkim, route } = authSender(workspaceId)
   const subject =
     purpose === 'recovery'
       ? `Reset your password for ${workspaceName}`
       : purpose === 'invite'
         ? `You are invited to ${workspaceName}`
         : `Sign in to ${workspaceName}`
-  const transport = makeTransport(dkim, route)
-  const info = await transport.sendMail({
-    from: `"${String(from.name).replaceAll('"', '')}" <${from.email}>`,
+  const result = await sendServiceEmail({
+    workspaceId,
     to,
     subject,
-    text: `${subject}\n\n${link}\n\nOne-time code: ${code}\n\nIf you did not request this message, ignore it.`,
     html: authHtml({ purpose, link, code, workspaceName }),
+    text: `${subject}\n\n${link}\n\nOne-time code: ${code}\n\nIf you did not request this message, ignore it.`,
     headers: {
       'X-Postique-Auth': purpose,
       'Auto-Submitted': 'auto-generated',
     },
   })
-  if (route.transport === 'file') {
-    const filename = `auth_${makeId('mail', 6)}.eml`
-    fs.writeFileSync(path.join(config.outboxDir, filename), info.message)
-    logger.warn({ filename }, 'Auth email written to the local outbox')
-  }
   return {
     sent: true,
-    transport: route.transport,
-    messageId: info.messageId,
+    transport: result.transport,
+    messageId: result.messageId,
   }
 }

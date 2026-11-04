@@ -3,6 +3,8 @@ import { config } from './config.js'
 import { getDb, closeDb } from './db/index.js'
 import { logger } from './lib/logger.js'
 import { cleanupSessions } from './lib/auth.js'
+import { cleanupVerifications } from './lib/verification.js'
+import { cleanupCampaignRecipients } from './lib/campaigns.js'
 import { startInboundServer, stopInboundServer } from './lib/inbound.js'
 import { startWorker, stopWorker } from './lib/queue.js'
 
@@ -55,8 +57,10 @@ startWorker()
 const sessionCleanup = setInterval(() => {
   try {
     cleanupSessions()
+    cleanupVerifications()
+    cleanupCampaignRecipients()
   } catch (error) {
-    logger.warn({ error: error.message }, 'Session cleanup failed')
+    logger.warn({ error: error.message }, 'Session or verification cleanup failed')
   }
 }, 60 * 60 * 1000)
 sessionCleanup.unref?.()

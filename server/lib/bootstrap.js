@@ -257,6 +257,8 @@ export function bootstrap(workspace, user) {
       sendLimit: config.limits.sendPerHour,
       maxAttachmentBytes: config.limits.maxAttachmentBytes,
       maxInboundBytes: config.inbound.maxSize,
+      verificationHours: config.verification.retentionHours,
+      verificationLinkMinutes: config.verification.tokenMinutes,
     },
   }
 }

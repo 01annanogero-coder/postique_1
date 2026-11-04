@@ -27,6 +27,25 @@ function failMessage(messageId, error, permanent) {
   if (!message) return
   const status = permanent ? 'failed' : 'queued'
   db.prepare('UPDATE messages SET status = ?, error = ? WHERE id = ?').run(status, error, messageId)
+  if (permanent && message.campaign_recipient_id) {
+    db.prepare("UPDATE campaign_recipients SET status = 'failed', error = ?, updated_at = ? WHERE id = ?").run(
+      String(error).slice(0, 1000),
+      nowIso(),
+      message.campaign_recipient_id,
+    )
+    if (message.campaign_id) {
+      const remaining = db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM campaign_recipients WHERE campaign_id = ? AND status IN ('pending','queued')",
+        )
+        .get(message.campaign_id).count
+      if (remaining === 0) {
+        db.prepare(
+          "UPDATE campaigns SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ?",
+        ).run(nowIso(), nowIso(), message.campaign_id)
+      }
+    }
+  }
   db.prepare('INSERT INTO message_events (id, message_id, type, payload_json, at) VALUES (?, ?, ?, ?, ?)').run(
     makeId('evt', 6),
     messageId,
@@ -55,6 +74,11 @@ async function runJob(job) {
   }
   if (job.type === 'webhook_delivery') {
     await deliverWebhook(payload.deliveryId)
+    return
+  }
+  if (job.type === 'campaign_batch') {
+    const { processCampaignBatch } = await import('./campaigns.js')
+    await processCampaignBatch(payload.campaignId)
     return
   }
   throw new Error(`Unknown job type: ${job.type}`)

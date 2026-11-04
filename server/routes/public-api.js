@@ -11,6 +11,16 @@ import { compileMjml, htmlToText, renderSubject } from '../lib/templates.js'
 import { messageView, threadView } from '../lib/presenters.js'
 import { createThread } from '../lib/workspace.js'
 import { parseAddressList, resolveSendingIdentity } from '../lib/mailer.js'
+import {
+  addCampaignRecipients,
+  campaignDetail,
+  cancelCampaign,
+  createCampaign,
+  listCampaigns,
+  pauseCampaign,
+  resumeCampaign,
+  startCampaign,
+} from '../lib/campaigns.js'
 
 export const publicApiRouter = express.Router()
 
@@ -386,6 +396,95 @@ publicApiRouter.post('/templates/:slug/render', async (req, res, next) => {
       subject: renderSubject(version.subject, variables),
       template: { id: template.id, slug: template.slug, name: template.name, version: version.version },
     })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/* BYOA campaign API for developer backends (secret key required). */
+publicApiRouter.get('/campaigns', (req, res, next) => {
+  try {
+    requireSecret(req)
+    res.json({ campaigns: listCampaigns(workspaceId(req), req.query.limit) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.post('/campaigns', (req, res, next) => {
+  try {
+    requireSecret(req)
+    const result = createCampaign({
+      workspaceId: workspaceId(req),
+      name: req.body?.name,
+      template: req.body?.template,
+      fromEmail: req.body?.from_email,
+      fromName: req.body?.from_name,
+      subject: req.body?.subject,
+      options: req.body?.options,
+      recipients: Array.isArray(req.body?.recipients) ? req.body.recipients : [],
+    })
+    res.status(201).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.get('/campaigns/:id', (req, res, next) => {
+  try {
+    requireSecret(req)
+    res.json(campaignDetail(workspaceId(req), req.params.id))
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.post('/campaigns/:id/recipients', (req, res, next) => {
+  try {
+    requireSecret(req)
+    res.status(201).json(
+      addCampaignRecipients({
+        workspaceId: workspaceId(req),
+        campaignId: req.params.id,
+        recipients: req.body?.recipients,
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.post('/campaigns/:id/start', (req, res, next) => {
+  try {
+    requireSecret(req)
+    res.status(202).json({ campaign: startCampaign(workspaceId(req), req.params.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.post('/campaigns/:id/pause', (req, res, next) => {
+  try {
+    requireSecret(req)
+    res.json({ campaign: pauseCampaign(workspaceId(req), req.params.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.post('/campaigns/:id/resume', (req, res, next) => {
+  try {
+    requireSecret(req)
+    res.json({ campaign: resumeCampaign(workspaceId(req), req.params.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.post('/campaigns/:id/cancel', (req, res, next) => {
+  try {
+    requireSecret(req)
+    res.json({ campaign: cancelCampaign(workspaceId(req), req.params.id) })
   } catch (error) {
     next(error)
   }

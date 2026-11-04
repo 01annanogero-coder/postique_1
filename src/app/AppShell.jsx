@@ -16,6 +16,8 @@ import {
   Layers,
   LayoutDashboard,
   LogOut,
+  MailCheck,
+  Megaphone,
   Menu,
   PanelRight,
   Search,
@@ -29,12 +31,14 @@ import { useAuth } from '../store/AuthContext'
 import { useStore } from '../store/StoreContext'
 import Overview from './Overview'
 import InboxPage from './InboxPage'
+import Campaigns from './Campaigns'
 import Domains from './Domains'
 import Logs from './Logs'
 import Automations from './Automations'
 import Assets from './Assets'
 import Developers from './Developers'
 import Authentication from './Authentication'
+import Verification from './Verification'
 import Embed from './Embed'
 import SettingsPage from './Settings'
 
@@ -43,6 +47,7 @@ const Studio = lazy(() => import('./Studio'))
 const primaryNav = [
   { label: 'Overview', path: '/app', icon: LayoutDashboard },
   { label: 'Inbox', path: '/app/inbox', icon: Inbox, badge: 'inbox' },
+  { label: 'Campaigns', path: '/app/campaigns', icon: Megaphone },
   { label: 'Template studio', path: '/app/studio', icon: Layers },
 ]
 
@@ -54,7 +59,8 @@ const infraNav = [
 ]
 
 const buildNav = [
-  { label: 'Authentication', path: '/app/auth', icon: Fingerprint },
+  { label: 'Verification', path: '/app/verification', icon: MailCheck },
+  { label: 'Accounts', path: '/app/auth', icon: Fingerprint },
   { label: 'Developers', path: '/app/developers', icon: Code2 },
   { label: 'Embedded inbox', path: '/app/embed', icon: PanelRight },
 ]
@@ -62,12 +68,14 @@ const buildNav = [
 const pageTitles = {
   '/app': 'Overview',
   '/app/inbox': 'Inbox',
+  '/app/campaigns': 'Campaigns',
   '/app/studio': 'Template studio',
   '/app/domains': 'Domains',
   '/app/logs': 'Logs & events',
   '/app/automations': 'Automations',
   '/app/assets': 'Assets',
-  '/app/auth': 'Authentication',
+  '/app/verification': 'Verification',
+  '/app/auth': 'Application accounts',
   '/app/developers': 'Developers',
   '/app/embed': 'Embedded inbox',
   '/app/settings': 'Settings',
@@ -263,12 +271,14 @@ function CommandPalette({ open, onClose }) {
     const pages = [
       { type: 'page', label: 'Overview', path: '/app', icon: LayoutDashboard },
       { type: 'page', label: 'Inbox', path: '/app/inbox', icon: Inbox },
+      { type: 'page', label: 'Campaigns', path: '/app/campaigns', icon: Megaphone },
       { type: 'page', label: 'Template studio', path: '/app/studio', icon: Layers },
       { type: 'page', label: 'Domains', path: '/app/domains', icon: Globe2 },
       { type: 'page', label: 'Logs & events', path: '/app/logs', icon: Activity },
       { type: 'page', label: 'Automations', path: '/app/automations', icon: Sparkles },
       { type: 'page', label: 'Assets', path: '/app/assets', icon: Image },
-      { type: 'page', label: 'Authentication', path: '/app/auth', icon: Fingerprint },
+      { type: 'page', label: 'Verification', path: '/app/verification', icon: MailCheck },
+      { type: 'page', label: 'Application accounts', path: '/app/auth', icon: Fingerprint },
       { type: 'page', label: 'Developers', path: '/app/developers', icon: Code2 },
       { type: 'page', label: 'Embedded inbox', path: '/app/embed', icon: PanelRight },
     ]
@@ -419,11 +429,13 @@ function CommandPalette({ open, onClose }) {
 function Page({ path }) {
   if (path === '/app') return <Overview />
   if (path.startsWith('/app/inbox')) return <InboxPage query={path.split('?')[1] || ''} />
+  if (path.startsWith('/app/campaigns')) return <Campaigns />
   if (path.startsWith('/app/studio')) return <Studio />
   if (path.startsWith('/app/domains')) return <Domains />
   if (path.startsWith('/app/logs')) return <Logs />
   if (path.startsWith('/app/automations')) return <Automations />
   if (path.startsWith('/app/assets')) return <Assets />
+  if (path.startsWith('/app/verification')) return <Verification />
   if (path.startsWith('/app/auth')) return <Authentication />
   if (path.startsWith('/app/developers')) return <Developers />
   if (path.startsWith('/app/embed')) return <Embed />

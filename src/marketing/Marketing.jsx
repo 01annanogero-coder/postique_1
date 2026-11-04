@@ -53,7 +53,9 @@ const capabilities = [
     items: [
       ['MJML Template Studio', 'Editor, variables, live preview, test send, draft and published versions.'],
       ['REST API and browser SDK', 'Template or raw HTML sends, idempotency, small attachments and authed API keys.'],
-      ['Application authentication', 'Email/password, JWT sessions, magic links, recovery and end-user management.'],
+      ['Application authentication', 'Optional accounts, email/password, JWT sessions, magic links and recovery.'],
+      ['Email verification without accounts', 'Developer-designed ownership links with single-use, auto-expiring proof.'],
+      ['BYOA campaigns', 'Push recipient batches from your backend; temporary audience storage with batching and progress.'],
       ['Embedded inbox', 'A themable <postique-inbox> widget scoped to your application’s external user IDs.'],
       ['Custom sending domains', 'Locally generated DKIM keys, SPF/DKIM/DMARC guidance and DNS verification.'],
       ['Threaded replies and inbound email', 'Built-in inbound SMTP, stable subjects, correct headers and manual linking.'],

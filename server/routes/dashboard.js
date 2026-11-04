@@ -31,6 +31,17 @@ import {
   setAppUserDisabled,
 } from '../lib/app-auth.js'
 import { enqueueWebhookDelivery } from '../lib/webhooks.js'
+import {
+  addCampaignRecipients,
+  campaignDetail,
+  cancelCampaign,
+  createCampaign,
+  listCampaigns,
+  pauseCampaign,
+  resumeCampaign,
+  startCampaign,
+} from '../lib/campaigns.js'
+import { createVerificationRequest, listVerifications } from '../lib/verification.js'
 import { requireAuth, requireCsrf, requireWorkspace, publicUser } from '../lib/auth.js'
 
 export const dashboardRouter = express.Router()
@@ -547,6 +558,122 @@ dashboardRouter.delete('/identities/:id', (req, res, next) => {
   try {
     removeIdentity(workspaceId(req), req.params.id)
     res.json({ ok: true })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/* Ephemeral email verification */
+dashboardRouter.get('/verifications', (req, res, next) => {
+  try {
+    res.json({ verifications: listVerifications(workspaceId(req), req.query.limit) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.post('/verifications/test', async (req, res, next) => {
+  try {
+    const result = await createVerificationRequest({
+      workspaceId: workspaceId(req),
+      email: req.body?.email,
+      name: req.body?.name,
+      template: req.body?.template,
+      redirectUrl: req.body?.redirect_url,
+      metadata: req.body?.metadata,
+      fromEmail: req.body?.from_email,
+      subject: req.body?.subject,
+      req,
+    })
+    res.status(202).json({
+      verification: {
+        id: result.id,
+        status: result.status,
+        email: result.email,
+        expires_at: result.expiresAt,
+      },
+      debug: result.debug || null,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/* BYOA campaigns */
+dashboardRouter.get('/campaigns', (req, res, next) => {
+  try {
+    res.json({ campaigns: listCampaigns(workspaceId(req), req.query.limit) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.post('/campaigns', (req, res, next) => {
+  try {
+    const result = createCampaign({
+      workspaceId: workspaceId(req),
+      name: req.body?.name,
+      template: req.body?.template,
+      fromEmail: req.body?.from_email,
+      fromName: req.body?.from_name,
+      subject: req.body?.subject,
+      options: req.body?.options,
+      recipients: Array.isArray(req.body?.recipients) ? req.body.recipients : [],
+    })
+    res.status(201).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.get('/campaigns/:id', (req, res, next) => {
+  try {
+    res.json(campaignDetail(workspaceId(req), req.params.id))
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.post('/campaigns/:id/recipients', (req, res, next) => {
+  try {
+    const result = addCampaignRecipients({
+      workspaceId: workspaceId(req),
+      campaignId: req.params.id,
+      recipients: req.body?.recipients,
+    })
+    res.status(201).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.post('/campaigns/:id/start', (req, res, next) => {
+  try {
+    res.status(202).json({ campaign: startCampaign(workspaceId(req), req.params.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.post('/campaigns/:id/pause', (req, res, next) => {
+  try {
+    res.json({ campaign: pauseCampaign(workspaceId(req), req.params.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.post('/campaigns/:id/resume', (req, res, next) => {
+  try {
+    res.json({ campaign: resumeCampaign(workspaceId(req), req.params.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.post('/campaigns/:id/cancel', (req, res, next) => {
+  try {
+    res.json({ campaign: cancelCampaign(workspaceId(req), req.params.id) })
   } catch (error) {
     next(error)
   }
