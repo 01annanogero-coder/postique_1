@@ -371,11 +371,39 @@ Public-key verification requests require the key’s fixed verification template
 | `POST` | `/verify/v1/confirm` | Confirm the link token from the page. |
 | `GET` | `/verify/v1/requests/:id` | Check status with a secret key. |
 | `GET` | `/verify/v1/jwks.json` | Public Ed25519 proof verification keys. |
+| `POST` | `/verify/v1/proofs/consume` | Burn a proof once using a secret key. |
 | `POST` | `/v1/verifications` | Create a public-key, browser-bound verification. |
 | `GET` | `/v1/verifications/:id` | Browser-bound status and proof. |
 | `POST` | `/v1/verifications/:id/confirm-code` | Confirm the emailed six-digit code. |
 
 Use **Application accounts** only when you need persistent users, passwords, JWTs and refresh sessions.
+
+### Verifying and consuming proofs
+
+The dependency-free helper lives in [packages/verify](packages/verify/index.js) as `postique-verify`. It runs in browsers, Node, Cloudflare Workers and edge runtimes:
+
+```js
+import { verifyProof } from "postique-verify";
+
+const claims = await verifyProof(token, {
+  jwksUrl: "https://mail.example.com/verify/v1/jwks.json",
+  audience: "https://app.example.com",
+  issuer: "https://mail.example.com",
+});
+```
+
+The same file is served by Postique at `/sdk/verify.js`. It checks the Ed25519 signature, expiry, audience and `email_verified`, and caches the JWKS for five minutes.
+
+Sites that need a proof to be single-use call the secret-key endpoint:
+
+```http
+POST /verify/v1/proofs/consume
+Authorization: Bearer pq_live_...
+
+{ "proof": "eyJ..." }
+```
+
+A second consume returns `409 proof_already_consumed`. Sites that can tolerate replay can use the helper alone.
 
 ## BYOA campaigns
 

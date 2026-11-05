@@ -1,0 +1,16 @@
+{
+  "name": "postique-verify",
+  "version": "0.1.0",
+  "description": "Verify Postique Ed25519 email-ownership proofs in browsers, Node, Workers and edge runtimes.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "license": "MIT"
+}

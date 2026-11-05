@@ -8,7 +8,7 @@ import { compileMjml, htmlToText, renderSubject } from './templates.js'
 import { sendServiceEmail } from './service-mail.js'
 import { logger } from './logger.js'
 import { enqueueWebhookEvent } from './webhooks.js'
-import { signVerificationProof } from './verification-proof.js'
+import { signVerificationProof, verifyVerificationProof } from './verification-proof.js'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -278,6 +278,38 @@ export function confirmVerificationCode({ workspaceId, id, apiKeyId, browserToke
   }
 }
 
+export function consumeVerificationProofToken({ workspaceId, proof }) {
+  const claims = verifyVerificationProof(proof)
+  if (claims.workspace_id !== workspaceId) {
+    throw fail(403, 'proof_workspace_mismatch', 'This proof belongs to another workspace.')
+  }
+  const db = getDb()
+  const row = db
+    .prepare('SELECT * FROM verification_requests WHERE id = ? AND workspace_id = ?')
+    .get(claims.sub, workspaceId)
+  if (!row || normaliseEmail(row.email) !== normaliseEmail(claims.email)) {
+    throw fail(404, 'verification_not_found', 'Verification request not found.')
+  }
+  const key = claims.api_key_id
+    ? db.prepare('SELECT * FROM api_keys WHERE id = ? AND workspace_id = ?').get(claims.api_key_id, workspaceId)
+    : null
+  const allowedOrigins = key ? parseJson(key.allowed_origins_json, []).map((origin) => String(origin).toLowerCase()) : []
+  if (!allowedOrigins.includes(String(claims.aud || '').toLowerCase())) {
+    throw fail(403, 'proof_audience_mismatch', 'This proof was not issued for an allowed browser origin.')
+  }
+  const consumed = db
+    .prepare('UPDATE verification_requests SET proof_consumed_at = ? WHERE id = ? AND proof_consumed_at IS NULL')
+    .run(nowIso(), row.id)
+  if (consumed.changes !== 1) throw fail(409, 'proof_already_consumed', 'This verification proof has already been consumed.')
+  return {
+    email: row.email,
+    verificationId: row.id,
+    verifiedAt: row.verified_at,
+    consumedAt: nowIso(),
+    claims,
+  }
+}
+
 export function verificationView(row) {
   return {
     id: row.id,
@@ -291,6 +323,7 @@ export function verificationView(row) {
     expiresAt: row.expires_at,
     verifiedAt: row.verified_at,
     consumedAt: row.consumed_at || null,
+    proofConsumedAt: row.proof_consumed_at || null,
   }
 }
 

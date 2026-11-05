@@ -4,6 +4,7 @@ import { fail } from '../lib/http.js'
 import { verificationJwks } from '../lib/verification-proof.js'
 import {
   confirmVerification,
+  consumeVerificationProofToken,
   createVerificationRequest,
   getVerification,
   lookupVerification,
@@ -103,6 +104,17 @@ verifyApiRouter.post('/requests', async (req, res, next) => {
 verifyApiRouter.get('/requests/:id', (req, res, next) => {
   try {
     res.json({ verification: getVerification(req.workspaceId, req.params.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+verifyApiRouter.post('/proofs/consume', (req, res, next) => {
+  try {
+    if (req.apiKey.kind !== 'secret') {
+      return next(fail(403, 'secret_key_required', 'Consume verification proofs with a secret API key.'))
+    }
+    res.json(consumeVerificationProofToken({ workspaceId: req.workspaceId, proof: req.body?.proof }))
   } catch (error) {
     next(error)
   }

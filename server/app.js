@@ -144,6 +144,13 @@ app.get('/sdk/postique-inbox.js', (_req, res) => {
   res.sendFile(path.join(config.rootDir || path.resolve(config.dataDir, '..'), 'server', 'public', 'postique-inbox.js'))
 })
 
+app.get('/sdk/verify.js', (_req, res) => {
+  res.type('application/javascript')
+  res.setHeader('Cache-Control', 'public, max-age=300')
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.sendFile(path.join(config.rootDir || path.resolve(config.dataDir, '..'), 'packages', 'verify', 'index.js'))
+})
+
 app.get('/media/assets/:filename', (req, res, next) => {
   try {
     const asset = getDb().prepare('SELECT * FROM assets WHERE storage_name = ?').get(req.params.filename)

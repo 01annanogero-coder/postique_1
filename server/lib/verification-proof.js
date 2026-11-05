@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { config } from '../config.js'
+import { fail } from './http.js'
 
 /**
  * Ed25519 proof signing for frontend-only verification.
@@ -61,4 +62,42 @@ export function signVerificationProof(row) {
   const signingInput = `${b64(header)}.${b64(payload)}`
   const signature = crypto.sign(null, Buffer.from(signingInput), privateKey).toString('base64url')
   return `${signingInput}.${signature}`
+}
+
+function decode(value) {
+  return JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
+}
+
+export function verifyVerificationProof(token, { audience = null, issuer = config.appUrl, clockToleranceSeconds = 30 } = {}) {
+  const parts = String(token || '').split('.')
+  if (parts.length !== 3) throw fail(401, 'invalid_proof', 'The verification proof is malformed.')
+  let header
+  let claims
+  try {
+    header = decode(parts[0])
+    claims = decode(parts[1])
+  } catch {
+    throw fail(401, 'invalid_proof', 'The verification proof is malformed.')
+  }
+  if (header.alg !== 'EdDSA') throw fail(401, 'invalid_proof', 'Unsupported proof algorithm.')
+  const { kid, publicJwk } = loadOrCreate()
+  if (header.kid !== kid) throw fail(401, 'invalid_proof', 'The verification proof uses an unknown key.')
+  const publicKey = crypto.createPublicKey({ key: publicJwk, format: 'jwk' })
+  const valid = crypto.verify(
+    null,
+    Buffer.from(`${parts[0]}.${parts[1]}`),
+    publicKey,
+    Buffer.from(parts[2], 'base64url'),
+  )
+  if (!valid) throw fail(401, 'invalid_proof', 'The verification proof signature is invalid.')
+  const now = Math.floor(Date.now() / 1000)
+  if (claims.email_verified !== true) throw fail(401, 'invalid_proof', 'The proof does not assert email ownership.')
+  if (claims.iss !== issuer) throw fail(401, 'invalid_proof', 'The verification proof issuer is not this Postique instance.')
+  if (!claims.exp || claims.exp + clockToleranceSeconds < now) throw fail(401, 'proof_expired', 'The verification proof has expired.')
+  if (claims.iat && claims.iat - clockToleranceSeconds > now) throw fail(401, 'invalid_proof', 'The verification proof is not valid yet.')
+  if (audience) {
+    const allowed = Array.isArray(audience) ? audience : [audience]
+    if (!allowed.includes(claims.aud)) throw fail(401, 'invalid_proof', 'The verification proof audience does not match.')
+  }
+  return claims
 }

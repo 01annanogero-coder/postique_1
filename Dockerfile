@@ -19,6 +19,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
+COPY --from=build /app/packages ./packages
 COPY --from=build /app/adapter ./adapter
 
 RUN mkdir -p /data && chown -R node:node /app /data
