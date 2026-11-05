@@ -16,7 +16,7 @@
     "worker": "node server/worker.js",
     "adapter": "node adapter/server.mjs",
     "password:reset": "node server/scripts/reset-password.js",
-    "test": "node --test",
+    "test": "node test/run.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
