@@ -382,7 +382,7 @@ export function StoreProvider({ children }) {
           allowedTemplates: allowedTemplates || [],
           allowedRecipients:
             typeof allowedRecipients === 'string'
-              ? allowedRecipients.split(',').map((email) => email.trim()).filter(Boolean)
+              ? allowedRecipients.split(/[\s,]+/).map((email) => email.trim()).filter(Boolean)
               : allowedRecipients || [],
         })
         setData((current) => ({ ...current, keys: [result.key, ...current.keys] }))

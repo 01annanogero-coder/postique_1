@@ -159,6 +159,58 @@ embedApiRouter.get('/session', (req, res) => {
   })
 })
 
+embedApiRouter.get('/events', (req, res) => {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  })
+  res.write('retry: 5000\n\n')
+
+  const db = getDb()
+  const fingerprint = () => {
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) AS count, COALESCE(MAX(last_activity_at), '') AS updated
+         FROM threads WHERE workspace_id = ? AND embed_user_id = ?`,
+      )
+      .get(req.embed.workspace_id, req.embed.sub)
+    const unread = db
+      .prepare(
+        'SELECT COALESCE(SUM(unread), 0) AS count FROM threads WHERE workspace_id = ? AND embed_user_id = ?',
+      )
+      .get(req.embed.workspace_id, req.embed.sub).count
+    return `${row.count}:${row.updated}:${unread}:${req.embed.exp}`
+  }
+
+  let previous = fingerprint()
+  const check = setInterval(() => {
+    if (Date.now() >= req.embed.exp * 1000) {
+      res.write('event: session.expired\ndata: {"message":"Inbox token expired."}\n\n')
+      res.end()
+      clearInterval(check)
+      clearInterval(heartbeat)
+      return
+    }
+    const next = fingerprint()
+    if (next !== previous) {
+      previous = next
+      res.write('event: refresh\ndata: {}\n\n')
+    }
+  }, 5000)
+  const heartbeat = setInterval(() => {
+    res.write(': heartbeat\n\n')
+  }, 15000)
+
+  const close = () => {
+    clearInterval(check)
+    clearInterval(heartbeat)
+  }
+  req.on('close', close)
+  res.on('close', close)
+})
+
 embedApiRouter.get('/threads', (req, res, next) => {
   try {
     const status = String(req.query.status || '').trim()

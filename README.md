@@ -13,11 +13,11 @@ There is no Supabase, Cloudflare, Amazon SES or other hosted service in the runt
 - **Local account system**: first-run owner setup, scrypt password hashing, HTTP-only sessions, CSRF protection, login rate limiting.
 - **SQLite database**: schema migrations, WAL mode, foreign keys and a local data directory.
 - **Template Studio**: browser MJML editor, live preview, server-side MJML compilation, variables, test sends, draft/published versions.
-- **Sending API**: REST API, browser SDK, bearer API keys, public browser keys with origin/template restrictions, idempotency keys, attachments and usage limits.
-- **Ephemeral email verification**: developer-designed verification emails, single-use links, signed status checks and automatic purge — no user account created.
-- **BYOA campaigns**: developer-supplied recipient batches, template personalization, batching, progress, pause/resume and temporary retention.
+- **Sending API**: REST API, browser SDK, bearer API keys, public browser keys with origin/template/recipient restrictions, idempotency keys, attachments and usage limits.
+- **Ephemeral email verification**: developer-designed verification emails, single-use links, secret-key status checks and automatic purge — no user account created.
+- **BYOA campaigns**: developer-supplied recipient batches, CSV/provider exports, template personalization, batching, progress, pause/resume, scheduling, analytics and temporary retention.
 - **Optional application accounts**: workspace-scoped end-users, email/password signup, JWT access tokens, rotating refresh sessions, magic links, email OTP, recovery and a browser auth SDK.
-- **Embedded inbox**: a scoped external-user API plus a themable `<postique-inbox>` web component for one thread or a conversation list.
+- **Embedded inbox**: a scoped external-user API plus a themable `<postique-inbox>` web component with authenticated live refresh and polling fallback.
 - **Threading**: Message-ID, In-Reply-To and References headers; stable reply subjects; per-thread reply addresses.
 - **Inbound SMTP**: built-in listener that receives replies, parses MIME, stores attachments, matches threads and keeps unmatched messages for manual linking.
 - **Outbound SMTP and routing**: file outbox for testing, per-domain SMTP relay, direct-to-MX, or a signed HTTP mail gateway. DKIM keys are generated locally per sending domain.
@@ -129,6 +129,9 @@ Copy `.env.example` to `.env`. The important values:
 | `SPF_RECORD` | SPF record shown in domain setup. Match your actual sending path. |
 | `DKIM_SELECTOR` | DKIM selector (default `postique`). |
 | `SEND_LIMIT_PER_HOUR` / `MONTHLY_SEND_LIMIT` | Local sending limits. |
+| `PUBLIC_SEND_PER_MINUTE` | Per-IP public-key send limit (default `20`). |
+| `PUBLIC_KEY_PER_MINUTE` | Global per-public-key send limit across all IPs (default `60`). |
+| `PUBLIC_SEND_PER_DAY` | Per-public-key 24-hour send cap (default `500`). |
 | `ALLOW_PRIVATE_WEBHOOKS` | Allow webhooks to private/LAN addresses. Keep `false` on public servers. |
 | `WORKER_ENABLED` | Run the send/retry/webhook worker inside the API process. |
 | `WORKER_CONCURRENCY` | Jobs processed concurrently per worker process (default `1`). |
@@ -148,7 +151,7 @@ Copy `.env.example` to `.env`. The important values:
 Postique supports all delivery shapes without changing the application API:
 
 - `direct` — connect directly to recipient MX servers from a VPS with port 25, a static IP and a matching PTR.
-- `smtp` — send through a self-hosted Postfix relay or an existing mailbox SMTP account.
+- `smtp` — send through a self-hosted Postfix relay, an existing mailbox SMTP account, or a provider such as SES/Postmark/Mailgun over SMTP. This is the recommended production route because the provider owns IP reputation and bounce handling.
 - `http` — send DKIM-signed raw MIME to a small HTTP mail gateway.
 
 The installation-wide default comes from `MAIL_TRANSPORT`. A domain can override it under **Domains → Delivery route**, so different sender domains can use different relays or direct delivery. Route credentials are encrypted in SQLite.
@@ -223,10 +226,26 @@ Useful endpoints:
 | `GET` | `/verify/v1/requests/:id` | Check whether an email was verified. |
 | `POST` | `/v1/campaigns` | Create a BYOA campaign draft. |
 | `POST` | `/v1/campaigns/:id/recipients` | Append a recipient batch. |
+| `POST` | `/v1/campaigns/:id/recipients/csv` | Append recipients from a CSV export (`email,name,external_user_id`). |
 | `POST` | `/v1/campaigns/:id/start` | Start or resume campaign delivery. |
 | `POST` | `/v1/campaigns/:id/schedule` | Schedule a draft campaign for later. |
+| `GET` | `/v1/campaigns/:id/analytics` | Delivery rate, status counts, recipient domains, daily volume and top errors. |
 
-Browser SDK: load `/sdk/postique.js` and use a **public** key. Public keys require allowed origins and at least one allowed published template.
+### Public-key security model
+
+Public browser keys are intentionally narrow:
+
+- A key must have at least one allowed recipient, one allowed published template and one allowed origin.
+- The `Origin` header is required and must match the allow-list. A copied key cannot be used from curl.
+- Public keys cannot use `cc`, `bcc`, `thread_id` or `in_reply_to`.
+- Sends are limited per IP, globally per key and to a 24-hour per-key cap (`PUBLIC_SEND_PER_DAY`).
+- The workspace hourly/monthly limits remain the final backstop.
+
+Use a secret key from a trusted server for arbitrary customer recipients, conversation replies, campaigns or anything that needs the full API. A public key is not a replacement for server-side authorization.
+
+Browser SDK: load `/sdk/postique.js` and use a **public** key. Public keys require an allowed origin, at least one allowed published template and an explicit recipient allow-list. They cannot use `cc`, `bcc`, `thread_id` or `in_reply_to`, and they must send from an allowed browser `Origin`.
+
+Public keys are for fixed, known recipients. If the recipient is arbitrary customer input, call the API with a secret key from your backend instead of trusting a browser key.
 
 ```html
 <script src="https://mail.example.com/sdk/postique.js"></script>
@@ -311,9 +330,11 @@ curl -X POST https://mail.example.com/v1/campaigns \
   }'
 ```
 
-Then `POST /v1/campaigns/:id/start`, or use **Campaigns** in the dashboard. The API also supports appending batches with `POST /v1/campaigns/:id/recipients`, so a large audience can be streamed in chunks rather than stored permanently. Pass `scheduled_at` at creation time, or call `POST /v1/campaigns/:id/schedule`, to have the worker start a draft later.
+Then `POST /v1/campaigns/:id/start`, or use **Campaigns** in the dashboard. The API also supports appending batches with `POST /v1/campaigns/:id/recipients`, so a large audience can be streamed in chunks rather than stored permanently. Provider exports can be appended with `POST /v1/campaigns/:id/recipients/csv` (CSV columns `email,name,external_user_id`), which is designed to accept Mailchimp, spreadsheet or S3 CSV exports without adding a provider-specific credential store. Pass `scheduled_at` at creation time, or call `POST /v1/campaigns/:id/schedule`, to have the worker start a draft later.
 
 Current defaults are 50 recipients per batch and 100,000 recipients per campaign, configurable through `CAMPAIGN_*` environment variables. This is a single-node queue profile; for millions of messages per hour, replace SQLite with a distributed queue/database and run a worker fleet.
+
+Campaign analytics are delivery-oriented: status counts, delivery rate, recipient-domain distribution, daily volume and grouped errors. They do not add open pixels or click redirects; those create privacy and reputation obligations that belong to a separate decision.
 
 ### Scaling the queue
 
@@ -484,6 +505,8 @@ Widget events:
 
 When the token expires, listen for `postique:session.expired`, mint a fresh token on your server and call `widget.setToken(nextToken)` (or update the `token` attribute). The widget also exposes `refresh()`.
 
+The widget opens an authenticated server-sent-event stream at `/embed/v1/events` and refreshes on thread changes. Browsers without streaming support fall back to 15-second polling.
+
 ```js
 document.querySelector('postique-inbox').addEventListener('postique:reply.sent', (event) => {
   console.log(event.detail.threadId);
@@ -514,6 +537,8 @@ X-Postique-Signature: sha256=<hex>
 ```
 
 Verify the signature against the raw request body using the webhook secret shown once at creation. Events: `message.sent`, `message.failed`, `message.bounced`, `message.complained`, `thread.reply_received`, `verification.completed`, `campaign.scheduled`, `campaign.started`, `campaign.paused`, `campaign.resumed`, `campaign.completed`, `campaign.cancelled`.
+
+Destinations are DNS-resolved and rejected if any address is private, loopback, link-local or CGNAT. Redirects are not followed. Set `ALLOW_PRIVATE_WEBHOOKS=true` only for local development.
 
 ## Operations
 
@@ -587,7 +612,7 @@ npm run build
 npm test
 ```
 
-Unit tests cover password hashing, address parsing, threading subjects, FAQ matching, JWT claims, token tampering, ephemeral verification records and unsubscribe tokens. The build is a Vite production build served by the Node server.
+Unit tests cover password hashing, address parsing, threading subjects, FAQ matching, JWT claims, token tampering, ephemeral verification records, unsubscribe tokens, public-key policy, webhook destinations/signatures and campaign CSV parsing. The build is a Vite production build served by the Node server.
 
 ## Production checklist
 
@@ -612,11 +637,12 @@ Unit tests cover password hashing, address parsing, threading subjects, FAQ matc
 - TOTP/MFA and passkeys.
 - Gmail/Outlook OAuth mailbox synchronization.
 - Generic mailbox imports.
-- Bulk marketing campaigns and scheduling.
+- Campaign open/click analytics and third-party audience sync (BYOA campaign delivery itself is included).
 - Deep structural customization of the prebuilt widget beyond theme tokens, slots and the headless API.
 
 ## Stack
 
 - Node.js, Express, built-in `node:sqlite`, `nodemailer`, `smtp-server`, `mailparser`, `mjml`, `handlebars`, `sanitize-html`.
+- `node:sqlite` is a young API. Pin a known Node release in production and run the migrations against a copy of the database before upgrading Node.
 - React 19, Vite, Lucide, Manrope and Instrument Serif.
 - `data/` for storage; no external database, queue, auth or email provider is required.

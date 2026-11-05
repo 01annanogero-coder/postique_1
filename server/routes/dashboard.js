@@ -32,8 +32,10 @@ import {
 } from '../lib/app-auth.js'
 import { enqueueWebhookDelivery } from '../lib/webhooks.js'
 import { cancelQueueJob, queueOverview, retryQueueJob } from '../lib/queue-admin.js'
+import { parseCampaignCsv } from '../lib/campaign-csv.js'
 import {
   addCampaignRecipients,
+  campaignAnalytics,
   campaignDetail,
   cancelCampaign,
   createCampaign,
@@ -637,12 +639,35 @@ dashboardRouter.get('/campaigns/:id', (req, res, next) => {
   }
 })
 
+dashboardRouter.get('/campaigns/:id/analytics', (req, res, next) => {
+  try {
+    res.json(campaignAnalytics(workspaceId(req), req.params.id))
+  } catch (error) {
+    next(error)
+  }
+})
+
 dashboardRouter.post('/campaigns/:id/recipients', (req, res, next) => {
   try {
     const result = addCampaignRecipients({
       workspaceId: workspaceId(req),
       campaignId: req.params.id,
       recipients: req.body?.recipients,
+    })
+    res.status(201).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.post('/campaigns/:id/recipients/csv', (req, res, next) => {
+  try {
+    const recipients = parseCampaignCsv(req.body?.csv)
+    if (!recipients.length) return next(fail(400, 'csv_empty', 'No recipient rows were found in the CSV.'))
+    const result = addCampaignRecipients({
+      workspaceId: workspaceId(req),
+      campaignId: req.params.id,
+      recipients,
     })
     res.status(201).json(result)
   } catch (error) {
@@ -721,8 +746,21 @@ dashboardRouter.post('/keys', (req, res, next) => {
     const kind = req.body?.kind === 'public' ? 'public' : 'secret'
     const name = String(req.body?.name || (kind === 'public' ? 'Browser integration' : 'API key')).slice(0, 120)
     const origins = Array.isArray(req.body?.allowedOrigins) ? req.body.allowedOrigins.map(String) : []
+    const recipientInput = Array.isArray(req.body?.allowedRecipients)
+      ? req.body.allowedRecipients.map((email) => normaliseEmail(email)).filter(Boolean)
+      : []
+    const allowedRecipients = recipientInput.filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
     if (kind === 'public' && origins.length === 0) {
       return next(fail(400, 'origins_required', 'Public keys require at least one allowed origin.'))
+    }
+    if (allowedRecipients.length !== recipientInput.length) {
+      return next(fail(400, 'invalid_allowed_recipient', 'Every allowed recipient must be a valid email address.'))
+    }
+    if (kind === 'public' && allowedRecipients.length === 0) {
+      return next(fail(400, 'allowed_recipients_required', 'Public keys require at least one allowed recipient.'))
+    }
+    if (allowedRecipients.length > 500) {
+      return next(fail(400, 'too_many_allowed_recipients', 'A public key can have at most 500 allowed recipients.'))
     }
     for (const origin of origins) {
       try {
@@ -749,7 +787,7 @@ dashboardRouter.post('/keys', (req, res, next) => {
       hashApiKey(key),
       JSON.stringify(origins),
       JSON.stringify(Array.isArray(req.body?.allowedTemplates) ? req.body.allowedTemplates : []),
-      JSON.stringify(Array.isArray(req.body?.allowedRecipients) ? req.body.allowedRecipients.map(normaliseEmail) : []),
+      JSON.stringify(allowedRecipients),
       Number(req.body?.rateLimit) || (kind === 'public' ? config.limits.publicSendPerMinute : 120),
       createdAt,
     )

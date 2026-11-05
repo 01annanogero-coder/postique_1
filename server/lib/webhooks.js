@@ -1,3 +1,5 @@
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { config } from '../config.js'
 import { getDb, nowIso, parseJson } from '../db/index.js'
 import { decryptSecret, makeId, signPayload } from './crypto.js'
@@ -44,6 +46,43 @@ function isPrivateHostname(hostname) {
   return false
 }
 
+export function isPrivateAddress(address) {
+  const family = isIP(address)
+  if (family === 4) {
+    const parts = address.split('.').map(Number)
+    if (parts[0] === 0 || parts[0] === 10 || parts[0] === 127) return true
+    if (parts[0] === 169 && parts[1] === 254) return true
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
+    if (parts[0] === 192 && parts[1] === 168) return true
+    if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true
+    if (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return true
+    if (parts[0] >= 224) return true
+    return false
+  }
+  if (family === 6) {
+    const value = address.toLowerCase()
+    if (value === '::' || value === '::1') return true
+    if (value.startsWith('fc') || value.startsWith('fd')) return true
+    if (/^fe[89ab]/.test(value)) return true
+    const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+    if (mapped) return isPrivateAddress(mapped[1])
+    return false
+  }
+  return true
+}
+
+async function assertPublicWebhookDestination(parsed) {
+  if (config.webhooks.allowPrivate) return
+  if (isPrivateHostname(parsed.hostname) || isPrivateAddress(parsed.hostname)) {
+    throw new Error('Private webhook destinations are disabled.')
+  }
+  const addresses = await lookup(parsed.hostname, { all: true, verbatim: true })
+  if (!addresses.length) throw new Error('Webhook hostname did not resolve.')
+  if (addresses.some((entry) => isPrivateAddress(entry.address))) {
+    throw new Error('Private webhook destinations are disabled.')
+  }
+}
+
 export async function deliverWebhook(deliveryId) {
   const db = getDb()
   const delivery = db.prepare('SELECT * FROM webhook_deliveries WHERE id = ?').get(deliveryId)
@@ -67,11 +106,17 @@ export async function deliverWebhook(deliveryId) {
     )
     return
   }
-  if (!config.webhooks.allowPrivate && isPrivateHostname(parsed.hostname)) {
-    throw new Error('Private webhook destinations are disabled.')
-  }
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error('Webhook URL must use HTTP or HTTPS.')
+  }
+  try {
+    await assertPublicWebhookDestination(parsed)
+  } catch (error) {
+    db.prepare("UPDATE webhook_deliveries SET status = 'failed', last_error = ? WHERE id = ?").run(
+      error.message,
+      delivery.id,
+    )
+    throw error
   }
   const secret = decryptSecret(hook.secret_enc)
   const signature = signPayload(delivery.payload_json, secret)
@@ -89,10 +134,17 @@ export async function deliverWebhook(deliveryId) {
         'x-postique-signature': `sha256=${signature}`,
       },
       body: delivery.payload_json,
+      redirect: 'manual',
       signal: controller.signal,
     })
   } finally {
     clearTimeout(timer)
+  }
+  if (response.status >= 300 && response.status < 400) {
+    db.prepare(
+      "UPDATE webhook_deliveries SET status = 'failed', attempts = attempts + 1, response_code = ?, last_error = ? WHERE id = ?",
+    ).run(response.status, 'Webhook redirects are not allowed.', delivery.id)
+    throw new Error('Webhook redirects are not allowed.')
   }
   const responseText = (await response.text().catch(() => '')).slice(0, 500)
   const attempts = delivery.attempts + 1

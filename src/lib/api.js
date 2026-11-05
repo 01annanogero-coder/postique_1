@@ -60,9 +60,12 @@ export const api = {
   verifications: () => apiRequest('/api/verifications'),
   sendVerificationTest: (data) => apiRequest('/api/verifications/test', { method: 'POST', body: data }),
   campaign: (id) => apiRequest(`/api/campaigns/${id}`),
+  campaignAnalytics: (id) => apiRequest(`/api/campaigns/${id}/analytics`),
   createCampaign: (data) => apiRequest('/api/campaigns', { method: 'POST', body: data }),
   addCampaignRecipients: (id, recipients) =>
     apiRequest(`/api/campaigns/${id}/recipients`, { method: 'POST', body: { recipients } }),
+  addCampaignRecipientsCsv: (id, csv) =>
+    apiRequest(`/api/campaigns/${id}/recipients/csv`, { method: 'POST', body: { csv } }),
   startCampaign: (id) => apiRequest(`/api/campaigns/${id}/start`, { method: 'POST', body: {} }),
   scheduleCampaign: (id, scheduledAt) =>
     apiRequest(`/api/campaigns/${id}/schedule`, { method: 'POST', body: { scheduled_at: scheduledAt } }),

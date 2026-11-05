@@ -12,7 +12,15 @@ import { messageView, threadView } from '../lib/presenters.js'
 import { createThread } from '../lib/workspace.js'
 import { parseAddressList, resolveSendingIdentity } from '../lib/mailer.js'
 import {
+  assertPublicDailyLimit,
+  assertPublicOrigin,
+  assertPublicRecipientPolicy,
+  assertPublicSendShape,
+  assertPublicTemplateAllowed,
+} from '../lib/public-key-policy.js'
+import {
   addCampaignRecipients,
+  campaignAnalytics,
   campaignDetail,
   cancelCampaign,
   createCampaign,
@@ -22,6 +30,7 @@ import {
   scheduleCampaign,
   startCampaign,
 } from '../lib/campaigns.js'
+import { parseCampaignCsv } from '../lib/campaign-csv.js'
 
 export const publicApiRouter = express.Router()
 
@@ -32,15 +41,11 @@ function workspaceId(req) {
 }
 
 function ensureTemplateAllowed(req, slug) {
-  if (req.apiKey.kind !== 'public') return
-  const allowed = parseJson(req.apiKey.allowed_templates_json, [])
-  if (allowed.length === 0) {
-    throw fail(403, 'template_not_allowed', 'This public key has no approved templates yet.')
-  }
-  if (!allowed.includes(slug)) {
-    throw fail(403, 'template_not_allowed', 'This public key is not allowed to send that template.')
-  }
-  if (!slug) throw fail(400, 'template_required', 'Public keys must send an approved template.')
+  assertPublicTemplateAllowed(req.apiKey, slug)
+}
+
+function ensureRecipientsAllowed(req, recipients) {
+  assertPublicRecipientPolicy(req.apiKey, recipients)
 }
 
 function requireSecret(req) {
@@ -53,15 +58,10 @@ function requireSecret(req) {
   }
 }
 
-function ensureRecipientsAllowed(req, recipients) {
-  if (req.apiKey.kind !== 'public') return
-  const allowed = parseJson(req.apiKey.allowed_recipients_json, [])
-  if (!allowed.length) return
-  for (const recipient of recipients) {
-    if (!allowed.includes(recipient.email)) {
-      throw fail(403, 'recipient_not_allowed', `This public key cannot send to ${recipient.email}.`)
-    }
-  }
+function requirePublicPolicy(req, body) {
+  assertPublicOrigin(req.apiKey, req.get('origin'))
+  assertPublicSendShape(req.apiKey, body)
+  assertPublicDailyLimit(req.apiKey)
 }
 
 function requireUnderLimit(wsId) {
@@ -172,6 +172,7 @@ publicApiRouter.post('/send', async (req, res, next) => {
   try {
     const body = req.body || {}
     const wsId = workspaceId(req)
+    requirePublicPolicy(req, body)
     requireUnderLimit(wsId)
     const idempotencyKey = String(req.get('idempotency-key') || body.idempotency_key || '').slice(0, 200)
     const requestHash = JSON.stringify(body)
@@ -381,6 +382,7 @@ publicApiRouter.post('/threads/:id/reply', async (req, res, next) => {
 
 publicApiRouter.post('/templates/:slug/render', async (req, res, next) => {
   try {
+    assertPublicTemplateAllowed(req.apiKey, req.params.slug)
     const template = getDb()
       .prepare('SELECT * FROM templates WHERE workspace_id = ? AND slug = ?')
       .get(workspaceId(req), req.params.slug)
@@ -441,6 +443,15 @@ publicApiRouter.get('/campaigns/:id', (req, res, next) => {
   }
 })
 
+publicApiRouter.get('/campaigns/:id/analytics', (req, res, next) => {
+  try {
+    requireSecret(req)
+    res.json(campaignAnalytics(workspaceId(req), req.params.id))
+  } catch (error) {
+    next(error)
+  }
+})
+
 publicApiRouter.post('/campaigns/:id/recipients', (req, res, next) => {
   try {
     requireSecret(req)
@@ -449,6 +460,23 @@ publicApiRouter.post('/campaigns/:id/recipients', (req, res, next) => {
         workspaceId: workspaceId(req),
         campaignId: req.params.id,
         recipients: req.body?.recipients,
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.post('/campaigns/:id/recipients/csv', (req, res, next) => {
+  try {
+    requireSecret(req)
+    const recipients = parseCampaignCsv(req.body?.csv)
+    if (!recipients.length) throw fail(400, 'csv_empty', 'No recipient rows were found in the CSV.')
+    res.status(201).json(
+      addCampaignRecipients({
+        workspaceId: workspaceId(req),
+        campaignId: req.params.id,
+        recipients,
       }),
     )
   } catch (error) {

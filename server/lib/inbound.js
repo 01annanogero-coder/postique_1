@@ -246,6 +246,23 @@ async function saveAttachments(parsed, messageId) {
   return saved
 }
 
+function identityForThread(db, workspaceId, threadId) {
+  const last = db
+    .prepare(
+      `SELECT from_email FROM messages
+       WHERE thread_id = ? AND direction = 'out' AND from_email != ''
+       ORDER BY date DESC, created_at DESC LIMIT 1`,
+    )
+    .get(threadId)
+  if (last?.from_email) {
+    const matched = db
+      .prepare('SELECT * FROM identities WHERE workspace_id = ? AND from_email = ? COLLATE NOCASE')
+      .get(workspaceId, last.from_email)
+    if (matched) return matched
+  }
+  return db.prepare('SELECT * FROM identities WHERE workspace_id = ? ORDER BY created_at LIMIT 1').get(workspaceId)
+}
+
 function maybeAutoReply({ workspaceId, thread, text, subject, parsed }) {
   if (!thread || thread.matched === 0) return
   const autoSubmitted = String(parsed.headers.get('auto-submitted') || '').toLowerCase()
@@ -268,9 +285,7 @@ function maybeAutoReply({ workspaceId, thread, text, subject, parsed }) {
   if (!faqs.length) return
   const result = analyseFaqs(faqs, text, settings)
   if (result.review || !result.reply) return
-  const identity = db
-    .prepare('SELECT * FROM identities WHERE workspace_id = ? ORDER BY created_at LIMIT 1')
-    .get(workspaceId)
+  const identity = identityForThread(db, workspaceId, thread.id)
   if (!identity) return
   const html = textToHtml(result.reply, `Re: ${subject || thread.subject}`)
   const message = createOutboundMessage({

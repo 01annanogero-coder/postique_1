@@ -228,10 +228,11 @@ export function keyView(key) {
     scope: key.revoked_at
       ? 'Revoked'
       : key.kind === 'public'
-        ? `${parseJson(key.allowed_templates_json, []).length || 'All'} templates`
+        ? `${parseJson(key.allowed_templates_json, []).length || 'No'} templates · ${parseJson(key.allowed_recipients_json, []).length || 'No'} recipients`
         : 'Full API access',
     origins: parseJson(key.allowed_origins_json, []),
     allowedTemplates: parseJson(key.allowed_templates_json, []),
+    allowedRecipients: parseJson(key.allowed_recipients_json, []),
     rateLimit: key.rate_limit,
   }
 }

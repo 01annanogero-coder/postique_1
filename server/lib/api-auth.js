@@ -17,13 +17,13 @@ function keyFromRequest(req) {
   return req.get('x-postique-key') || req.body?.public_key || ''
 }
 
-function bucketKey(apiKey, req) {
-  return `${apiKey.id}:${req.ip}`
+function bucketKey(apiKey, req, scope = 'ip') {
+  return `${apiKey.id}:${scope}:${scope === 'key' ? 'global' : req.ip}`
 }
 
-export function rateLimit(apiKey, req, limit, windowMs = 60_000) {
+export function rateLimit(apiKey, req, limit, windowMs = 60_000, scope = 'ip') {
   const now = Date.now()
-  const id = bucketKey(apiKey, req)
+  const id = bucketKey(apiKey, req, scope)
   let bucket = buckets.get(id)
   if (!bucket || bucket.resetAt < now) {
     bucket = { count: 0, resetAt: now + windowMs }
@@ -76,14 +76,15 @@ export function authenticateApiKey(req, _res, next) {
     if (!workspace) return next(fail(401, 'invalid_api_key', 'The workspace for this key no longer exists.'))
 
     const origin = req.get('origin')
-    const allowedOrigins = parseJson(record.allowed_origins_json, [])
+    const allowedOrigins = parseJson(record.allowed_origins_json, []).map((entry) => String(entry).toLowerCase())
     if (record.kind === 'public') {
-      // Same-origin browser fetches often omit Origin. Cross-origin requests
-      // always send it, and those must match the key's allow-list.
-      if (origin && !allowedOrigins.includes(origin)) {
+      if (origin && !allowedOrigins.includes(String(origin).trim().toLowerCase())) {
         return next(fail(403, 'origin_not_allowed', 'This public key is not allowed from this origin.'))
       }
       rateLimit(record, req, Math.min(record.rate_limit || 60, config.limits.publicSendPerMinute))
+      // A global per-key bucket prevents a leaked key from bypassing the
+      // per-IP bucket by rotating IP addresses.
+      rateLimit(record, req, config.limits.publicKeyPerMinute, 60_000, 'key')
     }
 
     db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(nowIso(), record.id)

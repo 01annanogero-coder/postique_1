@@ -106,6 +106,7 @@ function CampaignRow({ campaign, onOpen, onAction }) {
 
 function CampaignDetail({
   detail,
+  analytics,
   loading,
   schedule,
   setSchedule,
@@ -115,6 +116,7 @@ function CampaignDetail({
   onAction,
   onAdd,
   onSchedule,
+  onCsv,
   busy,
 }) {
   const campaign = detail?.campaign
@@ -161,6 +163,14 @@ function CampaignDetail({
             <div><span>Cancelled</span><strong>{campaign.cancelled}</strong></div>
             <div><span>Unsubscribed</span><strong>{campaign.unsubscribed}</strong></div>
           </div>
+
+          {analytics && (
+            <div className="campaign-detail__analytics">
+              <span><strong>{analytics.deliveryRate}%</strong> delivery rate</span>
+              <span>{analytics.byDomain.slice(0, 3).map((item) => `${item.domain} (${item.count})`).join(' · ') || 'No domain data'}</span>
+              {analytics.errors[0] && <span className="campaign-detail__error">{analytics.errors[0].count}× {analytics.errors[0].message}</span>}
+            </div>
+          )}
 
           {campaign.status === 'running' && (
             <div className="campaign-detail__actions">
@@ -239,6 +249,18 @@ function CampaignDetail({
               <Button variant="secondary" onClick={onAdd} disabled={!parseRecipients(audience).length || busy} icon={<Plus size={14} />}>
                 Add recipients
               </Button>
+              <label className="button button--secondary button--sm campaign-csv-button">
+                Import CSV
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    if (file) onCsv(file)
+                    event.target.value = ''
+                  }}
+                />
+              </label>
             </div>
           )}
         </div>
@@ -262,6 +284,7 @@ export default function Campaigns() {
   const [scheduledAt, setScheduledAt] = useState('')
   const [detailId, setDetailId] = useState(null)
   const [detail, setDetail] = useState(null)
+  const [analytics, setAnalytics] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailAudience, setDetailAudience] = useState('')
   const [detailSchedule, setDetailSchedule] = useState('')
@@ -287,7 +310,13 @@ export default function Campaigns() {
     if (!id) return
     setDetailLoading(true)
     try {
-      setDetail(await api.campaign(id))
+      const nextDetail = await api.campaign(id)
+      setDetail(nextDetail)
+      try {
+        setAnalytics(await api.campaignAnalytics(id))
+      } catch {
+        setAnalytics(null)
+      }
     } catch (error) {
       toast('Campaign could not be loaded', 'error', error.message)
     } finally {
@@ -315,6 +344,7 @@ export default function Campaigns() {
   const openDetail = (campaign) => {
     setDetailId(campaign.id)
     setDetail(null)
+    setAnalytics(null)
     setDetailAudience('')
     setDetailSchedule(localInput(campaign.scheduledAt))
   }
@@ -406,6 +436,21 @@ export default function Campaigns() {
       await load()
     } catch (error) {
       toast('Campaign could not be scheduled', 'error', error.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const importCsv = async (file) => {
+    if (!detailId) return
+    setBusy(true)
+    try {
+      const result = await api.addCampaignRecipientsCsv(detailId, await file.text())
+      toast('CSV imported', 'success', `${result.added} added · ${result.total} total`)
+      await loadDetail(detailId)
+      await load()
+    } catch (error) {
+      toast('CSV could not be imported', 'error', error.message)
     } finally {
       setBusy(false)
     }
@@ -561,6 +606,7 @@ export default function Campaigns() {
       {detailId && (
         <CampaignDetail
           detail={detail}
+          analytics={analytics}
           loading={detailLoading}
           schedule={detailSchedule}
           setSchedule={setDetailSchedule}
@@ -573,6 +619,7 @@ export default function Campaigns() {
           onAction={action}
           onAdd={addRecipients}
           onSchedule={schedule}
+          onCsv={importCsv}
           busy={busy}
         />
       )}

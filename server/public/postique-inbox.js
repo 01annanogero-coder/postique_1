@@ -122,6 +122,65 @@
       )
     }
 
+    startEvents() {
+      this.stopEvents()
+      if (!this.token || !global.fetch || !global.AbortController) return
+      var controller = new AbortController()
+      this._events = controller
+      this._eventsStopped = false
+      var self = this
+      global
+        .fetch(this.apiBase + '/embed/v1/events', {
+          headers: { authorization: 'Bearer ' + this.token },
+          signal: controller.signal,
+        })
+        .then(function (response) {
+          if (response.status === 401) {
+            var error = new Error('Inbox token expired.')
+            error.status = 401
+            self.fail(error)
+            return
+          }
+          if (!response.ok || !response.body || !response.body.getReader) return
+          var reader = response.body.getReader()
+          var decoder = new TextDecoder()
+          var buffer = ''
+          function read() {
+            return reader.read().then(function (result) {
+              if (result.done) {
+                if (!self._eventsStopped) setTimeout(function () { self.startEvents() }, 5000)
+                return
+              }
+              buffer += decoder.decode(result.value, { stream: true })
+              var parts = buffer.split('\n\n')
+              buffer = parts.pop()
+              parts.forEach(function (part) {
+                if (part.indexOf('event: refresh') >= 0) self.poll()
+                if (part.indexOf('event: session.expired') >= 0) {
+                  var error = new Error('Inbox token expired.')
+                  error.status = 401
+                  self.fail(error)
+                }
+              })
+              return read()
+            })
+          }
+          return read()
+        })
+        .catch(function (error) {
+          if (!error || error.name === 'AbortError' || self._eventsStopped) return
+          setTimeout(function () { self.startEvents() }, 5000)
+        })
+    }
+
+    stopEvents() {
+      this._eventsStopped = true
+      if (this._events) {
+        this._events.abort()
+        this._events = null
+      }
+    }
+
     static get observedAttributes() {
       return ['token', 'base-url', 'thread-id']
     }
@@ -132,6 +191,7 @@
 
     disconnectedCallback() {
       clearInterval(this._poll)
+      this.stopEvents()
       document.removeEventListener('visibilitychange', this._visibility)
       this.shadowRoot.removeEventListener('click', this._onClick)
       this.shadowRoot.removeEventListener('input', this._onInput)
@@ -330,6 +390,7 @@
         return
       }
       this.startPolling()
+      this.startEvents()
       this.state.loading = true
       this.state.error = null
       this.render()
@@ -413,6 +474,7 @@
 
     fail(error) {
       clearInterval(this._poll)
+      this.stopEvents()
       this.state.loading = false
       this.state.threadLoading = false
       this.state.error = error

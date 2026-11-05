@@ -1998,6 +1998,28 @@
   justify-content: flex-end;
 }
 
+.campaign-detail__analytics {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px 10px;
+  border: 1px solid #e7ecdd;
+  border-radius: 6px;
+  background: #f8faf3;
+  color: #7f8b75;
+  font-size: 7px;
+}
+
+.campaign-detail__analytics strong {
+  color: #526f37;
+  font-size: 9px;
+}
+
+.campaign-detail__error {
+  color: #a55b45;
+}
+
 .campaign-detail__schedule {
   display: flex;
   align-items: flex-end;
@@ -2120,6 +2142,24 @@
 
 .campaign-audience--small {
   min-height: 76px;
+}
+
+.campaign-csv-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.campaign-csv-button input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .queue-stats {

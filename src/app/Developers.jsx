@@ -148,6 +148,7 @@ function CreateKeyModal({ open, onClose }) {
   const [name, setName] = useState('')
   const [origins, setOrigins] = useState(typeof window !== 'undefined' ? window.location.origin : '')
   const [allowedTemplates, setAllowedTemplates] = useState([])
+  const [allowedRecipients, setAllowedRecipients] = useState('')
   const [createdKey, setCreatedKey] = useState(null)
 
   useEffect(() => {
@@ -156,6 +157,7 @@ function CreateKeyModal({ open, onClose }) {
       setName('')
       setOrigins(typeof window !== 'undefined' ? window.location.origin : '')
       setAllowedTemplates([])
+      setAllowedRecipients('')
       setCreatedKey(null)
     }
   }, [open])
@@ -185,9 +187,9 @@ function CreateKeyModal({ open, onClose }) {
               Cancel
             </Button>
             <Button
-              disabled={kind === 'public' && allowedTemplates.length === 0}
+              disabled={kind === 'public' && (allowedTemplates.length === 0 || !allowedRecipients.trim())}
               onClick={async () => {
-                const secret = await addKey({ name, kind, origins, allowedTemplates })
+                const secret = await addKey({ name, kind, origins, allowedTemplates, allowedRecipients })
                 if (secret) setCreatedKey(secret)
               }}
               icon={<Plus size={14} />}
@@ -252,6 +254,17 @@ function CreateKeyModal({ open, onClose }) {
                 <input className="input" value={origins} onChange={(event) => setOrigins(event.target.value)} placeholder="https://acme.co.ke" />
               </Field>
               <div className="field">
+                <span className="field__label">Allowed recipients</span>
+                <span className="field__hint">Comma-separated. Public keys can only send to these addresses.</span>
+                <textarea
+                  className="input"
+                  rows={3}
+                  value={allowedRecipients}
+                  onChange={(event) => setAllowedRecipients(event.target.value)}
+                  placeholder="customer@example.com, support@example.com"
+                />
+              </div>
+              <div className="field">
                 <span className="field__label">Allowed templates</span>
                 <span className="field__hint">Public keys can only send templates selected here.</span>
                 <div className="key-template-list">
@@ -286,7 +299,7 @@ function CreateKeyModal({ open, onClose }) {
           <div className="create-key__note">
             <ShieldCheck size={13} />
             {kind === 'public'
-              ? 'Public sends are rate-limited, size-limited and template-scoped on the server, regardless of the browser.'
+              ? 'Public sends are recipient-allow-listed, origin-bound, template-scoped and rate-limited on the server.'
               : 'The key is hashed before storage. Postique cannot recover the original after creation.'}
           </div>
         </div>

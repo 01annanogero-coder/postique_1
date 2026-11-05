@@ -131,6 +131,37 @@ export function campaignDetail(workspaceId, id) {
   return { campaign: campaignView(campaign), recipients }
 }
 
+export function campaignAnalytics(workspaceId, id) {
+  const campaign = getCampaign(workspaceId, id)
+  const rows = getDb()
+    .prepare('SELECT email, status, error, created_at FROM campaign_recipients WHERE campaign_id = ?')
+    .all(id)
+  const byStatus = {}
+  const byDomain = {}
+  const byDay = {}
+  const errors = new Map()
+  for (const row of rows) {
+    byStatus[row.status] = (byStatus[row.status] || 0) + 1
+    const domain = String(row.email).split('@')[1] || 'unknown'
+    byDomain[domain] = (byDomain[domain] || 0) + 1
+    const day = String(row.created_at).slice(0, 10)
+    byDay[day] = (byDay[day] || 0) + 1
+    if (row.error) errors.set(row.error, (errors.get(row.error) || 0) + 1)
+  }
+  const total = rows.length
+  const delivered = byStatus.sent || 0
+  return {
+    campaign: campaignView(campaign),
+    total,
+    delivered,
+    deliveryRate: total ? Math.round((delivered / total) * 1000) / 10 : 0,
+    byStatus,
+    byDomain: Object.entries(byDomain).sort((a, b) => b[1] - a[1]).slice(0, 20).map(([domain, count]) => ({ domain, count })),
+    byDay: Object.entries(byDay).sort(([a], [b]) => a.localeCompare(b)).map(([day, count]) => ({ day, count })),
+    errors: [...errors.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([message, count]) => ({ message, count })),
+  }
+}
+
 function normaliseSchedule(value) {
   if (!value) return null
   const date = new Date(value)
