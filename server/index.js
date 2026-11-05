@@ -7,6 +7,7 @@ import { cleanupVerifications } from './lib/verification.js'
 import { cleanupCampaignRecipients } from './lib/campaigns.js'
 import { startInboundServer, stopInboundServer, cleanupUnmatchedInbound } from './lib/inbound.js'
 import { startWorker, stopWorker } from './lib/queue.js'
+import { cleanupIdempotencyKeys } from './routes/public-api.js'
 
 getDb()
 
@@ -54,17 +55,22 @@ try {
 
 startWorker()
 
+const cleanupSteps = [
+  ['sessions', cleanupSessions],
+  ['verifications', cleanupVerifications],
+  ['campaign recipients', cleanupCampaignRecipients],
+  ['unmatched inbound mail', cleanupUnmatchedInbound],
+  ['idempotency keys', cleanupIdempotencyKeys],
+]
+
 const sessionCleanup = setInterval(() => {
-  try {
-    cleanupSessions()
-    cleanupVerifications()
-    cleanupCampaignRecipients()
-    cleanupUnmatchedInbound()
-    getDb()
-      .prepare('DELETE FROM idempotency_keys WHERE created_at < ?')
-      .run(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-  } catch (error) {
-    logger.warn({ error: error.message }, 'Session or verification cleanup failed')
+  // Each step is isolated so one failure cannot starve the ones after it.
+  for (const [name, step] of cleanupSteps) {
+    try {
+      step()
+    } catch (error) {
+      logger.warn({ error: error.message, step: name }, 'Scheduled cleanup step failed')
+    }
   }
 }, 60 * 60 * 1000)
 sessionCleanup.unref?.()

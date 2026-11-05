@@ -80,6 +80,7 @@ export const config = {
     tokenMinutes: number(process.env.EMBED_TOKEN_MINUTES, 60),
     maxThreads: number(process.env.EMBED_MAX_THREADS, 50),
     maxAttachments: number(process.env.EMBED_MAX_ATTACHMENTS, 5),
+    repliesPerHour: number(process.env.EMBED_REPLIES_PER_HOUR, 20),
   },
   verification: {
     tokenMinutes: number(process.env.VERIFY_TOKEN_MINUTES, 30),
@@ -104,6 +105,7 @@ export const config = {
     maxClients: number(process.env.INBOUND_MAX_CLIENTS, 25),
     ratePerHour: number(process.env.INBOUND_RATE_PER_HOUR, 100),
     retentionDays: number(process.env.INBOUND_RETENTION_DAYS, 30),
+    allowSendingDomains: bool(process.env.INBOUND_ALLOW_SENDING_DOMAINS, false),
     tlsKey: pemValue(process.env.INBOUND_TLS_KEY || ''),
     tlsCert: pemValue(process.env.INBOUND_TLS_CERT || ''),
     httpSecret: process.env.INBOUND_HTTP_SECRET || '',
@@ -129,6 +131,7 @@ export const config = {
     publicVerifyPerHour: number(process.env.PUBLIC_VERIFY_PER_HOUR, 5),
     publicVerifyPerDay: number(process.env.PUBLIC_VERIFY_PER_DAY, 20),
     publicAuthPerDay: number(process.env.PUBLIC_AUTH_PER_DAY, 100),
+    publicAuthKeyPerDay: number(process.env.PUBLIC_AUTH_KEY_PER_DAY, 1000),
     maxAttachmentBytes: number(process.env.MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024),
     maxAssetBytes: number(process.env.MAX_ASSET_BYTES, 10 * 1024 * 1024),
   },

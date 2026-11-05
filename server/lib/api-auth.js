@@ -19,7 +19,10 @@ function keyFromRequest(req) {
 }
 
 function bucketKey(apiKey, req, scope = 'ip') {
-  return `${apiKey.id}:${scope}:${scope === 'key' ? 'global' : req.ip}`
+  // Scopes named 'key' or ending in '-key' count across all callers of the key;
+  // every other scope is per client IP.
+  const global = scope === 'key' || scope.endsWith('-key')
+  return `${apiKey.id}:${scope}:${global ? 'global' : req.ip}`
 }
 
 export function rateLimit(apiKey, req, limit, windowMs = 60_000, scope = 'ip') {
@@ -114,6 +117,7 @@ export function apiKeyView(record) {
     recipientPolicy: record.recipient_policy || 'fixed',
     verificationTemplate: record.verification_template || '',
     senderIdentity: record.sender_identity_email || '',
+    allowAuth: Boolean(record.allow_auth),
     rateLimit: record.rate_limit,
     createdAt: record.created_at,
     lastUsedAt: record.last_used_at,

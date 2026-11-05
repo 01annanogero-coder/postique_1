@@ -208,7 +208,11 @@ embedApiRouter.get('/events', (req, res) => {
     res.write(': heartbeat\n\n')
   }, 15000)
 
+  let closed = false
   const close = () => {
+    // Both req and res emit 'close'; decrement the stream counter only once.
+    if (closed) return
+    closed = true
     clearInterval(check)
     clearInterval(heartbeat)
     const remaining = Math.max(0, (eventConnections.get(connectionKey) || 1) - 1)
@@ -261,6 +265,19 @@ embedApiRouter.post('/threads/:id/messages', (req, res, next) => {
     if (!text) return next(fail(400, 'empty_message', 'Write a message before sending.'))
     if (text.length > 10000) return next(fail(400, 'message_too_long', 'Keep replies under 10,000 characters.'))
     const db = getDb()
+    // Every reply notifies the owner and fires webhooks, so cap how fast one
+    // embedded user can post, across all of their threads.
+    const recentReplies = db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM messages m
+         JOIN threads t ON t.id = m.thread_id
+         WHERE t.workspace_id = ? AND t.embed_user_id = ? AND m.direction = 'in' AND m.author_type = 'human'
+           AND m.created_at >= ?`,
+      )
+      .get(req.embed.workspace_id, req.embed.sub, new Date(Date.now() - 60 * 60 * 1000).toISOString()).count
+    if (recentReplies >= config.embed.repliesPerHour) {
+      return next(fail(429, 'reply_rate_limited', 'You are sending replies too quickly. Try again later.'))
+    }
     const support = db
       .prepare(
         `SELECT from_email, from_name FROM messages

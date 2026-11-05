@@ -236,6 +236,7 @@ export function keyView(key) {
     recipientPolicy: key.recipient_policy || 'fixed',
     verificationTemplate: key.verification_template || '',
     senderIdentity: key.sender_identity_email || '',
+    allowAuth: Boolean(key.allow_auth),
     rateLimit: key.rate_limit,
   }
 }

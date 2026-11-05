@@ -37,6 +37,7 @@ ${action ? `<form method="post" action="${escape(action)}" style="margin-top:24p
 verifyApiRouter.get('/confirm', (req, res) => {
   try {
     const verification = lookupVerification(req.query.token)
+    res.setHeader('Cache-Control', 'no-store')
     if (verification.status === 'verified') {
       return res.type('html').send(confirmationPage('Email already confirmed', 'This address has already been verified. You can return to the site that sent you here.'))
     }
@@ -51,13 +52,19 @@ verifyApiRouter.get('/confirm', (req, res) => {
   }
 })
 
+function redirectPage(destination) {
+  const safe = escape(destination)
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${safe}"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verified</title></head><body style="margin:0;background:#f3f0e8;font-family:system-ui,sans-serif;color:#20251f"><main style="max-width:480px;margin:12vh auto;background:#fffefa;border:1px solid #e2ddd1;border-radius:14px;padding:32px"><h1 style="font-size:24px;margin:0 0 8px">Email confirmed</h1><p style="font-size:14px;line-height:1.6;color:#687262">Returning you to the application…</p><p><a href="${safe}" style="color:#40553a">Continue</a></p></main></body></html>`
+}
+
 verifyApiRouter.post('/confirm', (req, res) => {
   try {
     const result = confirmVerification(req.body?.token, req)
     const destination = new URL(result.redirectUrl)
     destination.searchParams.set('verification_id', result.id)
     destination.searchParams.set('verification', 'success')
-    return res.redirect(302, destination.toString())
+    res.setHeader('Cache-Control', 'no-store')
+    return res.type('html').send(redirectPage(destination.toString()))
   } catch (error) {
     const status = error.statusCode || error.status || 400
     return res.status(status).type('html').send(confirmationPage('That link did not work', error.message))

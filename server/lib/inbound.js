@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import path from 'node:path'
 import { SMTPServer } from 'smtp-server'
 import { simpleParser } from 'mailparser'
@@ -14,9 +15,21 @@ import { createThread, automationSettings, addThreadParticipant } from './worksp
 import { createOutboundMessage } from './messages.js'
 import { notifyOwner } from './notify.js'
 import { enqueueWebhookEvent } from './webhooks.js'
+import { parseVerpAddress } from './verp.js'
 
 let smtpServer = null
 const inboundBuckets = new Map()
+
+function allowInboundDomain(email) {
+  const domain = String(email || '').split('@')[1] || ''
+  if (domain.toLowerCase() === String(config.inbound.domain).toLowerCase()) return true
+  if (!config.inbound.allowSendingDomains) return false
+  return Boolean(
+    getDb()
+      .prepare("SELECT 1 FROM domains WHERE name = ? COLLATE NOCASE AND status = 'verified'")
+      .get(domain),
+  )
+}
 
 function allowInboundIp(ip) {
   const now = Date.now()
@@ -100,6 +113,10 @@ function safeHtml(html) {
       },
     },
     allowedSchemes: ['http', 'https', 'mailto', 'cid', 'data'],
+    allowedSchemesByTag: {
+      a: ['http', 'https', 'mailto'],
+      img: ['http', 'https', 'cid', 'data'],
+    },
     transformTags: {
       a: (tagName, attribs) => ({
         tagName,
@@ -170,31 +187,27 @@ function findThread({ recipients, parsed, from, workspaceId }) {
   return { thread: null, method: 'none', workspaceId }
 }
 
-function recordBounce({ parsed, originalId, failedRecipient, workspaceId }) {
+function recordBounce({ parsed, originalId, failedRecipient, workspaceId, hardFailure = false }) {
   const db = getDb()
   let original = null
   if (originalId) {
     original = db
-      .prepare('SELECT * FROM messages WHERE (id = ? OR message_id = ?) AND workspace_id = ?')
-      .get(originalId, originalId, workspaceId)
-  }
-  if (!original && failedRecipient) {
-    const recent = db
-      .prepare(
-        `SELECT * FROM messages
-         WHERE workspace_id = ? AND direction = 'out'
-         ORDER BY created_at DESC LIMIT 200`,
-      )
-      .all(workspaceId)
-    original = recent.find((message) =>
-      parseJson(message.to_json, []).some(
-        (recipient) => normaliseEmail(recipient.email) === normaliseEmail(failedRecipient),
-      ),
-    )
+      .prepare('SELECT * FROM messages WHERE id = ? AND workspace_id = ? AND direction = \'out\'')
+      .get(originalId, workspaceId)
   }
   if (!original) {
-    logger.warn({ originalId, failedRecipient }, 'Received a delivery failure that could not be matched')
+    logger.warn({ originalId, failedRecipient }, 'Received a delivery failure without a matching VERP message')
     return false
+  }
+  if (!hardFailure) {
+    db.prepare('INSERT INTO message_events (id, message_id, type, payload_json, at) VALUES (?, ?, ?, ?, ?)').run(
+      makeId('evt', 6),
+      original.id,
+      'deferred',
+      JSON.stringify({ detail: 'Soft delivery delay reported by remote server', failedRecipient }),
+      nowIso(),
+    )
+    return true
   }
   db.prepare("UPDATE messages SET status = 'bounced', error = ? WHERE id = ?").run(
     `Delivery failed${failedRecipient ? ` for ${failedRecipient}` : ''}`,
@@ -225,46 +238,40 @@ function recordBounce({ parsed, originalId, failedRecipient, workspaceId }) {
   return true
 }
 
-function recordComplaint({ parsed, workspaceId }) {
+function recordComplaint({ parsed, workspaceId, verpMessageId }) {
   const db = getDb()
   const text = `${parsed.text || ''}\n${parsed.html || ''}`
   const match = text.match(/(?:Original-Rcpt-To|Final-Recipient):\s*(?:rfc822;)?\s*([^\s<>]+@[^\s<>]+)/i)
-  const recipient = normaliseEmail(match?.[1] || addressOf(parsed.from).email)
-  const original = recipient
+  const recipient = normaliseEmail(match?.[1] || '')
+  const original = verpMessageId
     ? db
-        .prepare(
-          `SELECT * FROM messages WHERE workspace_id = ? AND direction = 'out' AND to_json LIKE ?
-           ORDER BY created_at DESC LIMIT 1`,
-        )
-        .get(workspaceId, `%${recipient}%`)
+        .prepare("SELECT * FROM messages WHERE id = ? AND workspace_id = ? AND direction = 'out'")
+        .get(verpMessageId, workspaceId)
     : null
-  if (original) {
-    db.prepare("UPDATE messages SET status = 'complained' WHERE id = ?").run(original.id)
-    db.prepare('INSERT INTO message_events (id, message_id, type, payload_json, at) VALUES (?, ?, ?, ?, ?)').run(
-      makeId('evt', 6),
-      original.id,
-      'complained',
-      JSON.stringify({ detail: 'Recipient filed an abuse complaint.' }),
-      nowIso(),
-    )
-  }
-  if (recipient) {
-    db.prepare(
-      `INSERT INTO suppressions (workspace_id, email, reason, created_at)
-       VALUES (?, ?, 'complaint', ?)
-       ON CONFLICT(workspace_id, email) DO NOTHING`,
-    ).run(workspaceId, recipient, nowIso())
-  }
+  if (!original || !recipient) return false
+  db.prepare("UPDATE messages SET status = 'complained' WHERE id = ?").run(original.id)
+  db.prepare('INSERT INTO message_events (id, message_id, type, payload_json, at) VALUES (?, ?, ?, ?, ?)').run(
+    makeId('evt', 6),
+    original.id,
+    'complained',
+    JSON.stringify({ detail: 'Recipient filed an abuse complaint.' }),
+    nowIso(),
+  )
+  db.prepare(
+    `INSERT INTO suppressions (workspace_id, email, reason, created_at)
+     VALUES (?, ?, 'complaint', ?)
+     ON CONFLICT(workspace_id, email) DO NOTHING`,
+  ).run(workspaceId, recipient, nowIso())
   enqueueWebhookEvent(workspaceId, 'message.complained', {
-    message: original ? { id: original.id, threadId: original.thread_id, status: 'complained' } : null,
+    message: { id: original.id, threadId: original.thread_id, status: 'complained' },
     recipient,
   })
   notifyOwner(workspaceId, {
-    subject: `Complaint received${recipient ? ` from ${recipient}` : ''}`,
-    text: `A recipient marked a message as spam.\n\nThe address has been added to the workspace suppression list.\n\nRecipient: ${recipient || 'unknown'}`,
+    subject: `Complaint received from ${recipient}`,
+    text: `A recipient marked a message as spam.\n\nThe address has been added to the workspace suppression list.\n\nRecipient: ${recipient}`,
     preference: 'notifyBounces',
   })
-  return Boolean(original)
+  return true
 }
 
 async function saveAttachments(parsed, messageId) {
@@ -373,22 +380,26 @@ export async function processEmail(raw, envelope = {}) {
   const isComplaint = /feedback-report/i.test(contentType) || /abuse report/i.test(parsed.subject || '')
   const envelopeSender = envelope?.mailFrom?.address || envelope?.from || ''
   const trustedReport = envelope?.trusted === true || !envelopeSender || envelopeSender === '<>'
-  const originalId =
-    parsed.headers.get('x-postique-message') ||
-    parsed.headers.get('x-postique-message-id') ||
-    (parsed.text || '').match(/X-Postique-Message:\s*<?([^>\s]+)>?/i)?.[1] ||
-    null
+  const verpMessageId = recipients.map(parseVerpAddress).find(Boolean) || null
 
-  if (isBounce && trustedReport) {
+  if (isBounce && trustedReport && verpMessageId) {
     const text = `${parsed.text || ''}\n${parsed.html || ''}`
     const failed =
       text.match(/Final-Recipient:\s*rfc822;\s*([^\s<>]+@[^\s<>]+)/i)?.[1] ||
       text.match(/Original-Recipient:\s*rfc822;\s*([^\s<>]+@[^\s<>]+)/i)?.[1] ||
       null
-    recordBounce({ parsed, originalId: originalId ? stripAngles(originalId) : null, failedRecipient: failed, workspaceId })
+    const statusCodes = [...text.matchAll(/^Status:\s*([245])\.\d+\.\d+/gim)].map((match) => match[1])
+    const hardFailure = statusCodes.length ? statusCodes.every((code) => code === '5') : /action:\s*failed/i.test(text)
+    recordBounce({
+      parsed,
+      originalId: verpMessageId,
+      failedRecipient: failed,
+      workspaceId,
+      hardFailure,
+    })
   }
-  if (isComplaint && trustedReport) {
-    recordComplaint({ parsed, workspaceId })
+  if (isComplaint && trustedReport && verpMessageId) {
+    recordComplaint({ parsed, workspaceId, verpMessageId })
   }
 
   if (!thread) {
@@ -528,13 +539,41 @@ export async function processEmail(raw, envelope = {}) {
 }
 
 export function cleanupUnmatchedInbound() {
-  return getDb()
+  const db = getDb()
+  const cutoff = new Date(Date.now() - config.inbound.retentionDays * 24 * 60 * 60 * 1000).toISOString()
+  const expired = `matched = 0 AND created_at < ?
+    AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = threads.id AND m.direction = 'out')`
+  // ON DELETE CASCADE removes the attachment rows, not the files they point at.
+  // Collect the paths first so the disk is reclaimed together with the rows.
+  const files = db
     .prepare(
-      `DELETE FROM threads
-       WHERE matched = 0 AND created_at < ?
-         AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = threads.id AND m.direction = 'out')`,
+      `SELECT a.storage_path FROM attachments a
+       JOIN messages m ON m.id = a.message_id
+       WHERE m.thread_id IN (SELECT id FROM threads WHERE ${expired})`,
     )
-    .run(new Date(Date.now() - config.inbound.retentionDays * 24 * 60 * 60 * 1000).toISOString())
+    .all(cutoff)
+  const result = db.prepare(`DELETE FROM threads WHERE ${expired}`).run(cutoff)
+  const folders = new Set()
+  for (const { storage_path: storagePath } of files) {
+    if (!storagePath) continue
+    const resolved = path.resolve(storagePath)
+    // Only ever delete inside the attachments directory.
+    if (!resolved.startsWith(path.resolve(config.attachmentsDir) + path.sep)) continue
+    try {
+      fsSync.unlinkSync(resolved)
+      folders.add(path.dirname(resolved))
+    } catch (error) {
+      if (error.code !== 'ENOENT') logger.warn({ error: error.message }, 'Could not remove expired attachment file')
+    }
+  }
+  for (const folder of folders) {
+    try {
+      fsSync.rmdirSync(folder) // only succeeds when empty
+    } catch {
+      // Non-empty or already gone.
+    }
+  }
+  return result
 }
 
 export function startInboundServer() {
@@ -552,7 +591,7 @@ export function startInboundServer() {
     hideSTARTTLS: !config.inbound.tlsKey || !config.inbound.tlsCert,
     onRcptTo(address, session, callback) {
       const email = normaliseEmail(address.address)
-      if (!email.endsWith(`@${config.inbound.domain}`)) {
+      if (!allowInboundDomain(email)) {
         return callback(Object.assign(new Error('Relay access denied for this recipient.'), { responseCode: 550 }))
       }
       if (!allowInboundIp(session.remoteAddress || 'unknown')) {

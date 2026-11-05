@@ -76,6 +76,13 @@ export function isPrivateAddress(address) {
     }
     const nat64 = value.match(/^64:ff9b::(?:[0-9a-f]{1,4}:){0,2}?(\d+\.\d+\.\d+\.\d+)$/)
     if (nat64) return isPrivateAddress(nat64[1])
+    // Node prints addresses in compressed hex, so NAT64 usually arrives as 64:ff9b::7f00:1.
+    const nat64Hex = value.match(/^64:ff9b::([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+    if (nat64Hex) {
+      const high = parseInt(nat64Hex[1], 16)
+      const low = parseInt(nat64Hex[2], 16)
+      return isPrivateAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`)
+    }
     return false
   }
   return true
@@ -91,41 +98,60 @@ async function resolvePublicWebhookDestination(parsed) {
   if (addresses.some((entry) => isPrivateAddress(entry.address))) {
     throw new Error('Private webhook destinations are disabled.')
   }
-  return addresses[0]
+  return addresses.map(({ address, family }) => ({ address, family }))
 }
 
-function sendWebhookRequest(parsed, body, headers, pinned) {
+// Node 20+ calls `lookup` with { all: true } (happy eyeballs) and expects an
+// array of { address, family }. Answer both calling conventions, and offer every
+// vetted address so a dead first record still falls back to the next one.
+export function pinnedLookup(addresses) {
+  return (_hostname, options, callback) => {
+    if (options && options.all) return callback(null, addresses.map((entry) => ({ ...entry })))
+    return callback(null, addresses[0].address, addresses[0].family)
+  }
+}
+
+const MAX_RESPONSE_PREVIEW = 500
+
+export function sendWebhookRequest(parsed, body, headers, pinned, { timeoutMs = config.webhooks.timeoutMs } = {}) {
   return new Promise((resolve, reject) => {
     const transport = parsed.protocol === 'https:' ? https : http
+    let settled = false
+    let deadline = null
+    const finish = (fn, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      fn(value)
+    }
     const request = transport.request(
       parsed,
       {
         method: 'POST',
         headers,
-        timeout: config.webhooks.timeoutMs,
         agent: false,
-        ...(pinned
-          ? {
-              lookup: (_hostname, _options, callback) => callback(null, pinned.address, pinned.family),
-            }
-          : {}),
+        ...(pinned?.length ? { lookup: pinnedLookup(pinned) } : {}),
       },
       (response) => {
+        const status = response.statusCode || 0
+        const result = (text) => ({ status, ok: status >= 200 && status < 300, text: text.slice(0, MAX_RESPONSE_PREVIEW) })
         let text = ''
+        response.setEncoding('utf8')
+        response.on('error', (error) => finish(reject, error))
         response.on('data', (chunk) => {
-          if (text.length < 500) text += chunk.toString('utf8')
+          text += chunk
+          if (text.length >= MAX_RESPONSE_PREVIEW) {
+            // Enough for the log. Stop reading so a streaming endpoint cannot pin the worker.
+            finish(resolve, result(text))
+            response.destroy()
+          }
         })
-        response.on('end', () => {
-          resolve({
-            status: response.statusCode || 0,
-            ok: (response.statusCode || 0) >= 200 && (response.statusCode || 0) < 300,
-            text: text.slice(0, 500),
-          })
-        })
+        response.on('end', () => finish(resolve, result(text)))
       },
     )
-    request.on('timeout', () => request.destroy(new Error('Webhook request timed out.')))
-    request.on('error', reject)
+    // One deadline for the whole exchange, body included (the socket idle timeout never fires on a slow drip).
+    deadline = setTimeout(() => request.destroy(new Error('Webhook request timed out.')), timeoutMs)
+    request.on('error', (error) => finish(reject, error))
     request.end(body)
   })
 }

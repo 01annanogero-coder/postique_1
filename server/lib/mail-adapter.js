@@ -20,8 +20,8 @@ export async function sendViaAdapter({ adapterUrl, adapterToken, timeoutMs = 200
   }
   const payload = JSON.stringify({
     envelope: {
-      from: mail.from,
-      to: mail.to,
+      from: mail.envelope?.from || mail.from,
+      to: mail.envelope?.to || [...(mail.to || []), ...(mail.cc || []), ...(mail.bcc || [])],
       cc: mail.cc || [],
       bcc: mail.bcc || [],
     },

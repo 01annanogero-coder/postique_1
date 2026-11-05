@@ -153,6 +153,7 @@ function CreateKeyModal({ open, onClose }) {
   const [recipientPolicy, setRecipientPolicy] = useState('fixed')
   const [verificationTemplate, setVerificationTemplate] = useState('')
   const [senderIdentity, setSenderIdentity] = useState('')
+  const [allowAuth, setAllowAuth] = useState(false)
   const [createdKey, setCreatedKey] = useState(null)
 
   useEffect(() => {
@@ -165,6 +166,7 @@ function CreateKeyModal({ open, onClose }) {
       setRecipientPolicy('fixed')
       setVerificationTemplate('')
       setSenderIdentity('')
+      setAllowAuth(false)
       setCreatedKey(null)
     }
   }, [open])
@@ -196,7 +198,7 @@ function CreateKeyModal({ open, onClose }) {
             <Button
               disabled={kind === 'public' && (allowedTemplates.length === 0 || (recipientPolicy === 'fixed' && !allowedRecipients.trim()))}
               onClick={async () => {
-                const secret = await addKey({ name, kind, origins, allowedTemplates, allowedRecipients, recipientPolicy, verificationTemplate, senderIdentity })
+                const secret = await addKey({ name, kind, origins, allowedTemplates, allowedRecipients, recipientPolicy, verificationTemplate, senderIdentity, allowAuth })
                 if (secret) setCreatedKey(secret)
               }}
               icon={<Plus size={14} />}
@@ -274,6 +276,10 @@ function CreateKeyModal({ open, onClose }) {
                   ))}
                 </select>
               </Field>
+              <label className="campaign-start-check">
+                <input type="checkbox" checked={allowAuth} onChange={(event) => setAllowAuth(event.target.checked)} />
+                <span>Allow application auth (signup, magic links and recovery) from this key</span>
+              </label>
               <Field
                 label="Visitor recipient policy"
                 hint={recipientPolicy === 'verified'

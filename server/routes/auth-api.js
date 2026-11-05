@@ -34,23 +34,13 @@ function allowedOrigins(req) {
 
 async function publicAuthGuard(req, email) {
   if (req.apiKey.kind !== 'public') return
+  if (!req.apiKey.allow_auth) throw fail(403, 'auth_not_enabled', 'Application auth is not enabled on this public key.')
   assertPublicOrigin(req.apiKey, req.get('origin'))
   assertPublicAuthRecipient(req.apiKey, email)
   rateLimit(req.apiKey, req, config.limits.publicAuthPerDay, 24 * 60 * 60 * 1000, 'auth-day')
+  // The per-IP bucket above is not enough alone: rotating IPs would sidestep it.
+  rateLimit(req.apiKey, req, config.limits.publicAuthKeyPerDay, 24 * 60 * 60 * 1000, 'auth-day-key')
   await verifyPublicCaptcha(req.body?.captcha_token, req.ip)
-}
-
-function redirectWithSession(res, result) {
-  const destination = new URL(result.redirectTo || config.appUrl)
-  const params = new URLSearchParams({
-    access_token: result.session.access_token,
-    refresh_token: result.session.refresh_token,
-    token_type: result.session.token_type,
-    expires_in: String(result.session.expires_in),
-    type: result.type || 'magiclink',
-  })
-  destination.hash = params.toString()
-  return res.redirect(302, destination.toString())
 }
 
 function escape(value) {
@@ -66,11 +56,17 @@ function confirmPage(title, message, token = '') {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title></head><body style="margin:0;background:#f3f0e8;font-family:system-ui,sans-serif;color:#20251f"><main style="max-width:480px;margin:12vh auto;background:#fffefa;border:1px solid #e2ddd1;border-radius:14px;padding:32px"><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8e9588">Postique</div><h1 style="font-size:26px;margin:12px 0 8px">${escape(title)}</h1><p style="font-size:14px;line-height:1.65;color:#687262;margin:0">${escape(message)}</p>${token ? `<form method="post" action="/auth/v1/verify/confirm" style="margin-top:24px"><input type="hidden" name="token" value="${escape(token)}"><button type="submit" style="border:0;border-radius:7px;padding:12px 18px;background:#171b17;color:#fff;font:inherit;font-weight:700;cursor:pointer">Sign in</button></form>` : ''}</main></body></html>`
 }
 
+function redirectPage(destination) {
+  const safe = escape(destination)
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${safe}"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Signed in</title></head><body style="margin:0;background:#f3f0e8;font-family:system-ui,sans-serif;color:#20251f"><main style="max-width:480px;margin:12vh auto;background:#fffefa;border:1px solid #e2ddd1;border-radius:14px;padding:32px"><h1 style="font-size:24px;margin:0 0 8px">Signed in</h1><p style="font-size:14px;line-height:1.6;color:#687262">Returning you to the application…</p><p><a href="${safe}" style="color:#40553a">Continue</a></p></main></body></html>`
+}
+
 // Magic links are opened by mail clients and link scanners. GET only renders a
 // page; the human click submits the POST that consumes the single-use token.
 authApiRouter.get('/verify', apiCors, (req, res) => {
   try {
     lookupAuthToken(req.query.token)
+    res.setHeader('Cache-Control', 'no-store')
     return res.type('html').send(
       confirmPage('Sign in to Postique', 'Click the button below to finish signing in.', req.query.token),
     )
@@ -82,7 +78,17 @@ authApiRouter.get('/verify', apiCors, (req, res) => {
 authApiRouter.post('/verify/confirm', apiCors, (req, res, next) => {
   try {
     const result = consumeAuthTokenByRaw({ token: req.body?.token, req })
-    return redirectWithSession(res, result)
+    const destination = new URL(result.redirectTo || config.appUrl)
+    const params = new URLSearchParams({
+      access_token: result.session.access_token,
+      refresh_token: result.session.refresh_token,
+      token_type: result.session.token_type,
+      expires_in: String(result.session.expires_in),
+      type: result.type || 'magiclink',
+    })
+    destination.hash = params.toString()
+    res.setHeader('Cache-Control', 'no-store')
+    return res.type('html').send(redirectPage(destination.toString()))
   } catch (error) {
     return next(error)
   }
@@ -245,7 +251,10 @@ authApiRouter.post('/recover', (req, res, next) => sendLink(req, res, next, 'rec
 
 authApiRouter.post('/verify', (req, res, next) => {
   try {
-    if (req.apiKey.kind === 'public') assertPublicOrigin(req.apiKey, req.get('origin'))
+    if (req.apiKey.kind === 'public') {
+      if (!req.apiKey.allow_auth) return next(fail(403, 'auth_not_enabled', 'Application auth is not enabled on this public key.'))
+      assertPublicOrigin(req.apiKey, req.get('origin'))
+    }
     const result = verifyAuthToken({
       workspaceId: req.workspaceId,
       token: req.body?.token || req.body?.code,

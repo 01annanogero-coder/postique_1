@@ -183,17 +183,29 @@ export function idempotencyLookup(wsId, key, requestHash) {
   return response
 }
 
+const RESERVATION_TTL_MS = 2 * 60 * 1000
+
 export function idempotencyReserve(wsId, key, requestHash) {
   if (!key) return { reserved: false, cached: null }
   const db = getDb()
-  const inserted = db
+  const insert = () =>
+    db
+      .prepare(
+        `INSERT INTO idempotency_keys (workspace_id, key, request_hash, message_id, response_json, created_at)
+         VALUES (?, ?, ?, NULL, '{}', ?)
+         ON CONFLICT(workspace_id, key) DO NOTHING`,
+      )
+      .run(wsId, key, requestHash, nowIso())
+  if (insert().changes === 1) return { reserved: true, cached: null }
+  // A reservation that never completed (process crashed mid-request) would
+  // otherwise block retries until the 24-hour purge. Reclaim it after a short TTL.
+  const stale = db
     .prepare(
-      `INSERT INTO idempotency_keys (workspace_id, key, request_hash, message_id, response_json, created_at)
-       VALUES (?, ?, ?, NULL, '{}', ?)
-       ON CONFLICT(workspace_id, key) DO NOTHING`,
+      `DELETE FROM idempotency_keys
+       WHERE workspace_id = ? AND key = ? AND response_json = '{}' AND created_at < ?`,
     )
-    .run(wsId, key, requestHash, nowIso())
-  if (inserted.changes === 1) return { reserved: true, cached: null }
+    .run(wsId, key, new Date(Date.now() - RESERVATION_TTL_MS).toISOString())
+  if (stale.changes === 1 && insert().changes === 1) return { reserved: true, cached: null }
   return { reserved: false, cached: idempotencyLookup(wsId, key, requestHash) }
 }
 
@@ -434,6 +446,10 @@ publicApiRouter.post('/threads/:id/reply', async (req, res, next) => {
     const wsId = workspaceId(req)
     const thread = getDb().prepare('SELECT * FROM threads WHERE id = ? AND workspace_id = ?').get(req.params.id, wsId)
     if (!thread) throw fail(404, 'thread_not_found', 'Conversation not found.')
+    const blocked = getDb()
+      .prepare('SELECT 1 FROM suppressions WHERE workspace_id = ? AND email = ?')
+      .get(wsId, normaliseEmail(thread.customer_email))
+    if (blocked) throw fail(422, 'suppressed_recipient', 'This recipient is suppressed.')
     const body = req.body || {}
     const content = await prepareContent(req, { ...body, thread_id: thread.id })
     const identity = resolveSendingIdentity(wsId, body.from || null)

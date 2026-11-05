@@ -122,6 +122,7 @@ Copy `.env.example` to `.env`. The important values:
 | `INBOUND_MAX_CLIENTS` | Maximum concurrent inbound SMTP clients (default `25`). |
 | `INBOUND_RATE_PER_HOUR` | Per-IP inbound message limit (default `100`). |
 | `INBOUND_RETENTION_DAYS` | Delete unmatched inbound threads after this window (default `30`). |
+| `INBOUND_ALLOW_SENDING_DOMAINS` | Also accept inbound mail for verified sending domains (default `false`). |
 | `INBOUND_DOMAIN` | Domain used for reply addresses, e.g. `in.example.com`. |
 | `INBOUND_TLS_KEY` / `INBOUND_TLS_CERT` | Optional STARTTLS key/certificate. |
 | `INBOUND_HTTP_SECRET` | Optional secret for the raw HTTP inbound bridge used by Postfix/Haraka. |
@@ -139,7 +140,8 @@ Copy `.env.example` to `.env`. The important values:
 | `PUBLIC_SEND_PER_DAY` | Per-public-key 24-hour send cap (default `500`). |
 | `PUBLIC_VERIFY_PER_HOUR` | Per-IP public-key verification-email limit (default `5`). |
 | `PUBLIC_VERIFY_PER_DAY` | Per-public-key 24-hour verification-email cap (default `20`). |
-| `PUBLIC_AUTH_PER_DAY` | Per-public-key 24-hour auth-email cap (default `100`). |
+| `PUBLIC_AUTH_PER_DAY` | Per-public-key, **per-client-IP** 24-hour auth-email cap (default `100`). |
+| `PUBLIC_AUTH_KEY_PER_DAY` | Per-public-key 24-hour auth-email cap across **all** clients, so rotating IPs cannot sidestep the per-IP cap (default `1000`). |
 | `ALLOW_PRIVATE_WEBHOOKS` | Allow webhooks to private/LAN addresses. Keep `false` on public servers. |
 | `WORKER_ENABLED` | Run the send/retry/webhook worker inside the API process. |
 | `WORKER_CONCURRENCY` | Jobs processed concurrently per worker process (default `1`). |
@@ -148,6 +150,7 @@ Copy `.env.example` to `.env`. The important values:
 | `AUTH_MAGIC_LINK_MINUTES` / `AUTH_OTP_MINUTES` | Magic-link and email-code expiry. |
 | `AUTH_DEBUG_LINKS` | Return generated magic links in local/development responses. Keep off on a public server. |
 | `EMBED_TOKEN_MINUTES` | Embedded inbox session lifetime (default `60`). |
+| `EMBED_REPLIES_PER_HOUR` | Replies one embedded user may post per hour across their threads (default `20`). |
 | `VERIFY_TOKEN_MINUTES` | Verification-link lifetime (default `30`). |
 | `VERIFY_RETENTION_HOURS` | How long verification records are retained (default `24`). |
 | `VERIFY_PROOF_MINUTES` | Lifetime of the signed Ed25519 proof (default `15`). |
@@ -182,7 +185,7 @@ t_<thread-token>@in.example.com
 
 Replies are matched by `In-Reply-To`/`References` first, then the reply token. Sender + subject fallback is deliberately disabled so a forged `From` cannot inject into another customer's thread. Unmatched mail is kept for manual linking and purged after `INBOUND_RETENTION_DAYS`.
 
-The SMTP listener only accepts recipients under `INBOUND_DOMAIN`, limits concurrent clients and per-IP message rate, and enforces `INBOUND_MAX_BYTES`. Bounce and complaint reports are only acted on when the envelope sender is null (or the request arrives through the secret-authenticated HTTP pipe); a forged “Undelivered Mail” message with a normal envelope sender is stored but cannot add suppressions.
+The SMTP listener only accepts recipients under `INBOUND_DOMAIN` (or a verified sending domain when `INBOUND_ALLOW_SENDING_DOMAINS=true`), limits concurrent clients and per-IP message rate, and enforces `INBOUND_MAX_BYTES`. Bounce and complaint reports are only acted on when the envelope sender is null, the report is tied to a signed VERP return path for a message this workspace sent, and — for bounces — the DSN reports a hard `5.x.x` failure. A forged “Undelivered Mail” message cannot add suppressions.
 
 For Postfix, Haraka or another MTA, you can instead pipe raw MIME to:
 
@@ -489,7 +492,7 @@ All endpoints are under `/auth/v1` and use the same public key as the browser SD
 
 A session response contains `access_token`, `refresh_token`, `token_type`, `expires_in`, `expires_at` and `user`. The access token is an HS256 JWT signed with a key derived from `APP_SECRET`; refresh tokens are stored hashed and rotate on every use. Revoking a session makes its access token unusable immediately.
 
-Public auth email endpoints now require an allowed `Origin`, a valid public-key recipient policy (fixed list or verified-visitor policy), the per-key `PUBLIC_AUTH_PER_DAY` cap, and the optional Turnstile challenge. `/signup`, `/otp`, `/magiclink` and `/recover` cannot be driven as an unauthenticated arbitrary-email relay. For public signup, use a **verified visitor** public key; fixed-recipient keys only accept their approved addresses.
+Public auth email endpoints now require an allowed `Origin`, an explicit `allowAuth` flag on the public key, a valid public-key recipient policy (fixed list or verified-visitor policy), the per-IP `PUBLIC_AUTH_PER_DAY` and per-key `PUBLIC_AUTH_KEY_PER_DAY` caps, and the optional Turnstile challenge. `/signup`, `/otp`, `/magiclink` and `/recover` cannot be driven as an unauthenticated arbitrary-email relay. For public signup, use a **verified visitor** public key; fixed-recipient keys only accept their approved addresses. New keys must enable **Allow application auth** in the key creation dialog.
 
 ### Browser SDK
 

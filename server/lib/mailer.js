@@ -11,6 +11,7 @@ import { formatMessageDate } from './presenters.js'
 import { SendError } from './mail-errors.js'
 import { sendViaAdapter } from './mail-adapter.js'
 import { resolveMailRoute } from './mail-route.js'
+import { verpAddress } from './verp.js'
 
 export { SendError }
 
@@ -173,6 +174,7 @@ export async function deliverMessage(messageId) {
   })
   const to = parseJson(message.to_json, [])
   const cc = parseJson(message.cc_json, [])
+  const bcc = parseJson(message.bcc_json, [])
   if (!to.length) throw new SendError('The message has no recipients.', { retryable: false, code: 'recipient_required' })
 
   const suppressed = db
@@ -215,7 +217,12 @@ export async function deliverMessage(messageId) {
     references: parseJson(message.references_json, []),
     headers,
     attachments: messageAttachments(message.id),
+    envelope: {
+      from: verpAddress(message.id),
+      to: [...to, ...cc, ...bcc].map((item) => item.email),
+    },
   }
+  headers['Return-Path'] = `<${mail.envelope.from}>`
 
   let info
   try {
