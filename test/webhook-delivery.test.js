@@ -90,3 +90,8 @@ test('NAT64 addresses embedding private IPv4 ranges are rejected in compressed h
   }
   assert.equal(isPrivateAddress('64:ff9b::808:808'), false)
 })
+
+test('normal hostnames are not mistaken for private IP addresses', () => {
+  assert.equal(isPrivateAddress('hooks.example.com'), false)
+  assert.equal(isPrivateAddress('api.stripe.com'), false)
+})

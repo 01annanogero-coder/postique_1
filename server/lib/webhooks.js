@@ -85,7 +85,7 @@ export function isPrivateAddress(address) {
     }
     return false
   }
-  return true
+  return false
 }
 
 async function resolvePublicWebhookDestination(parsed) {

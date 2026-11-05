@@ -20,6 +20,7 @@ import { fail } from '../lib/http.js'
 import { authSettings } from '../lib/workspace.js'
 import { assertPublicAuthRecipient, assertPublicOrigin } from '../lib/public-key-policy.js'
 import { verifyPublicCaptcha } from '../lib/captcha.js'
+import { logger } from '../lib/logger.js'
 
 export const authApiRouter = express.Router()
 
@@ -222,7 +223,7 @@ authApiRouter.put('/user', (req, res, next) => {
 async function sendLink(req, res, next, purpose) {
   try {
     await publicAuthGuard(req, req.body?.email)
-    const result = await requestAuthLink({
+    const delivery = requestAuthLink({
       workspaceId: req.workspaceId,
       email: req.body?.email,
       purpose,
@@ -231,7 +232,17 @@ async function sendLink(req, res, next, purpose) {
       createUser: req.body?.create_user !== false,
       req,
     })
-    if (config.auth.debugLinks && result.debug) {
+    // In production the response must not reveal whether an account exists or
+    // wait on SMTP. The delivery promise is logged and the client gets the same
+    // generic response either way.
+    if (!config.auth.debugLinks) {
+      delivery.catch((error) => logger.warn({ error: error.message }, 'Auth link delivery failed'))
+      return res.status(202).json({
+        message: 'If that email can sign in, a magic link and one-time code have been sent.',
+      })
+    }
+    const result = await delivery
+    if (result.debug) {
       return res.status(202).json({
         message: 'Authentication link generated.',
         debug: result.debug,

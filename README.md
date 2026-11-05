@@ -715,7 +715,9 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-The compose file mounts a persistent volume at `/data` and exposes `3000` (HTTP) and `2525` (inbound SMTP). Map inbound port 25 at your host/proxy if you want to receive internet mail.
+The compose file mounts a persistent volume at `/data`. Both HTTP (`3000`) and inbound SMTP (`2525`) bind to `127.0.0.1` by default; use a TLS reverse proxy for HTTP and set `POSTIQUE_HTTP_BIND=0.0.0.0` only when that is intentional.
+
+Inbound SMTP must not be exposed to the internet without `INBOUND_TLS_KEY`/`INBOUND_TLS_CERT` (STARTTLS), firewall rules and an MX record. Set `POSTIQUE_SMTP_BIND=0.0.0.0` and map port 25 at the host only after those are configured. The mail gateway is also loopback-bound by default (`ADAPTER_BIND`).
 
 The optional `mail-gateway` service runs the HTTP adapter on port `8787`:
 

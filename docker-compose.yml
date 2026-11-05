@@ -3,9 +3,11 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "3000:3000"
-      # Point this at 25 on a public host if you want to receive internet mail directly.
-      - "2525:2525"
+      # Bind to loopback by default; expose through a TLS reverse proxy.
+      - "${POSTIQUE_HTTP_BIND:-127.0.0.1}:3000:3000"
+      # Only expose inbound SMTP after configuring TLS and MX. Set
+      # POSTIQUE_SMTP_BIND=0.0.0.0 when the host is a public MX.
+      - "${POSTIQUE_SMTP_BIND:-127.0.0.1}:2525:2525"
     env_file:
       - .env
     environment:
@@ -31,7 +33,7 @@ services:
       ADAPTER_TOKEN: ${MAIL_ADAPTER_TOKEN}
       SMTP_URL: ${SMTP_URL}
     ports:
-      - "8787:8787"
+      - "${ADAPTER_BIND:-127.0.0.1}:8787:8787"
 
 volumes:
   postique-data:
