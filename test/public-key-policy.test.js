@@ -5,6 +5,7 @@ import {
   assertPublicRecipientPolicy,
   assertPublicSendShape,
   assertPublicTemplateAllowed,
+  assertPublicVerificationPolicy,
 } from '../server/lib/public-key-policy.js'
 
 const key = {
@@ -54,4 +55,29 @@ test('public keys only render approved templates', () => {
     () => assertPublicTemplateAllowed(key, 'other-template'),
     (error) => error.code === 'template_not_allowed',
   )
+})
+
+test('verified-visitor keys require a matching proof for unlisted recipients', () => {
+  const verifiedKey = { ...key, recipient_policy: 'verified', allowed_recipients_json: '[]' }
+  assert.doesNotThrow(() =>
+    assertPublicRecipientPolicy(verifiedKey, [{ email: 'visitor@example.com' }], {
+      verificationEmail: 'visitor@example.com',
+    }),
+  )
+  assert.throws(
+    () => assertPublicRecipientPolicy(verifiedKey, [{ email: 'visitor@example.com' }]),
+    (error) => error.code === 'recipient_not_allowed',
+  )
+  assert.throws(
+    () =>
+      assertPublicRecipientPolicy(verifiedKey, [{ email: 'visitor@example.com' }, { email: 'two@example.com' }], {
+        verificationEmail: 'visitor@example.com',
+      }),
+    (error) => error.code === 'recipient_not_allowed',
+  )
+  assert.throws(
+    () => assertPublicVerificationPolicy({ ...key, recipient_policy: 'fixed' }),
+    (error) => error.code === 'verified_policy_required',
+  )
+  assert.doesNotThrow(() => assertPublicVerificationPolicy(verifiedKey))
 })

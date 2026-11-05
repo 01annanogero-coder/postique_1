@@ -106,6 +106,7 @@ export function apiKeyView(record) {
     allowedOrigins: parseJson(record.allowed_origins_json, []),
     allowedTemplates: parseJson(record.allowed_templates_json, []),
     allowedRecipients: parseJson(record.allowed_recipients_json, []),
+    recipientPolicy: record.recipient_policy || 'fixed',
     rateLimit: record.rate_limit,
     createdAt: record.created_at,
     lastUsedAt: record.last_used_at,

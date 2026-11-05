@@ -85,6 +85,14 @@
     return this.request('/v1/send', payload)
   }
 
+  Postique.prototype.verify = function (payload) {
+    return this.request('/v1/verifications', payload)
+  }
+
+  Postique.prototype.verification = function (id) {
+    return this.request('/v1/verifications/' + encodeURIComponent(id))
+  }
+
   Postique.prototype.render = function (slug, variables) {
     return this.request('/v1/templates/' + encodeURIComponent(slug) + '/render', {
       variables: variables || {},

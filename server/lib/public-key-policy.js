@@ -15,10 +15,11 @@ export function publicAllowedRecipients(key) {
   return normaliseList(key.allowed_recipients_json)
 }
 
-export function assertPublicRecipientPolicy(key, recipients) {
+export function assertPublicRecipientPolicy(key, recipients, { verificationEmail = null } = {}) {
   if (key.kind !== 'public') return
   const allowed = publicAllowedRecipients(key)
-  if (!allowed.length) {
+  const verified = key.recipient_policy === 'verified'
+  if (!allowed.length && !verified) {
     throw fail(
       403,
       'recipient_policy_required',
@@ -27,9 +28,30 @@ export function assertPublicRecipientPolicy(key, recipients) {
   }
   const allowedSet = new Set(allowed)
   for (const recipient of recipients) {
-    if (!allowedSet.has(String(recipient.email || '').toLowerCase())) {
-      throw fail(403, 'recipient_not_allowed', `This public key cannot send to ${recipient.email}.`)
+    const email = String(recipient.email || '').toLowerCase()
+    if (allowedSet.has(email)) continue
+    if (verified && recipients.length === 1 && verificationEmail && email === String(verificationEmail).toLowerCase()) {
+      continue
     }
+    throw fail(403, 'recipient_not_allowed', `This public key cannot send to ${recipient.email}.`)
+  }
+}
+
+export function assertPublicVerificationPolicy(key) {
+  if (key.kind !== 'public') return
+  if (key.recipient_policy !== 'verified') {
+    throw fail(403, 'verified_policy_required', 'Enable verified-visitor sends on this public key first.')
+  }
+}
+
+export function assertPublicDailyVerifyLimit(key) {
+  if (key.kind !== 'public') return
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const count = getDb()
+    .prepare('SELECT COUNT(*) AS count FROM verification_requests WHERE api_key_id = ? AND created_at >= ?')
+    .get(key.id, since).count
+  if (count >= config.limits.publicVerifyPerDay) {
+    throw fail(429, 'public_key_verification_limit', 'This public key has reached its 24-hour verification-email limit.')
   }
 }
 

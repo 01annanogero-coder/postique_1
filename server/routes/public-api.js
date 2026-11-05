@@ -13,11 +13,19 @@ import { createThread } from '../lib/workspace.js'
 import { parseAddressList, resolveSendingIdentity } from '../lib/mailer.js'
 import {
   assertPublicDailyLimit,
+  assertPublicDailyVerifyLimit,
   assertPublicOrigin,
   assertPublicRecipientPolicy,
   assertPublicSendShape,
   assertPublicTemplateAllowed,
+  assertPublicVerificationPolicy,
 } from '../lib/public-key-policy.js'
+import {
+  consumeVerificationProof,
+  createVerificationRequest,
+  getVerificationProof,
+  publicVerificationView,
+} from '../lib/verification.js'
 import {
   addCampaignRecipients,
   campaignAnalytics,
@@ -44,8 +52,14 @@ function ensureTemplateAllowed(req, slug) {
   assertPublicTemplateAllowed(req.apiKey, slug)
 }
 
-function ensureRecipientsAllowed(req, recipients) {
-  assertPublicRecipientPolicy(req.apiKey, recipients)
+function ensureRecipientsAllowed(req, recipients, options) {
+  assertPublicRecipientPolicy(req.apiKey, recipients, options)
+}
+
+function requirePublicKey(req) {
+  if (req.apiKey.kind !== 'public') {
+    throw fail(403, 'public_key_required', 'Use a public browser key for this endpoint.')
+  }
 }
 
 function requireSecret(req) {
@@ -183,7 +197,21 @@ publicApiRouter.post('/send', async (req, res, next) => {
     const recipients = parseAddressList(body.to)
     if (!recipients.length) throw fail(400, 'recipient_required', 'At least one valid recipient is required.')
     if (recipients.length > 20) throw fail(400, 'too_many_recipients', 'A message can have at most 20 recipients.')
-    ensureRecipientsAllowed(req, recipients)
+    const verificationId = String(body.verification_id || '').trim()
+    let verificationProof = null
+    if (verificationId) {
+      assertPublicVerificationPolicy(req.apiKey)
+      if (recipients.length !== 1) {
+        throw fail(403, 'verification_single_recipient', 'A verification proof can send to exactly one recipient.')
+      }
+      verificationProof = getVerificationProof({
+        workspaceId: wsId,
+        id: verificationId,
+        email: recipients[0].email,
+        apiKeyId: req.apiKey.id,
+      })
+    }
+    ensureRecipientsAllowed(req, recipients, { verificationEmail: verificationProof?.email })
     const cc = parseAddressList(body.cc)
     const bcc = parseAddressList(body.bcc)
     const suppressed = getDb()
@@ -252,6 +280,14 @@ publicApiRouter.post('/send', async (req, res, next) => {
       threadId = thread.id
     }
     const attachments = await saveApiAttachments(wsId, req.apiKey.kind === 'public' ? [] : body.attachments)
+    if (verificationProof) {
+      consumeVerificationProof({
+        workspaceId: wsId,
+        id: verificationProof.id,
+        email: recipients[0].email,
+        apiKeyId: req.apiKey.id,
+      })
+    }
     const message = createOutboundMessage({
       workspaceId: wsId,
       threadId,
@@ -266,6 +302,7 @@ publicApiRouter.post('/send', async (req, res, next) => {
       apiKeyId: req.apiKey.id,
       authorType: 'api',
       attachments,
+      verificationId: verificationProof?.id || null,
     })
     const response = {
       id: message.id,
@@ -374,6 +411,54 @@ publicApiRouter.post('/threads/:id/reply', async (req, res, next) => {
       thread_id: thread.id,
       status: message.status,
       message_id: message.message_id,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.post('/verifications', async (req, res, next) => {
+  try {
+    requirePublicKey(req)
+    assertPublicOrigin(req.apiKey, req.get('origin'))
+    assertPublicVerificationPolicy(req.apiKey)
+    assertPublicDailyVerifyLimit(req.apiKey)
+    rateLimit(req.apiKey, req, config.limits.publicVerifyPerHour, 60 * 60 * 1000, 'verify-ip')
+    if (req.body?.template) assertPublicTemplateAllowed(req.apiKey, req.body.template)
+    const result = await createVerificationRequest({
+      workspaceId: workspaceId(req),
+      email: req.body?.email,
+      name: req.body?.name,
+      template: req.body?.template || '',
+      redirectUrl: req.body?.redirect_url,
+      metadata: req.body?.metadata,
+      apiKeyId: req.apiKey.id,
+      req,
+    })
+    res.status(202).json({
+      verification: {
+        id: result.id,
+        email: result.email,
+        status: result.status,
+        expires_at: result.expiresAt,
+      },
+      debug: result.debug || null,
+    })
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.get('/verifications/:id', (req, res, next) => {
+  try {
+    requirePublicKey(req)
+    assertPublicOrigin(req.apiKey, req.get('origin'))
+    res.json({
+      verification: publicVerificationView({
+        workspaceId: workspaceId(req),
+        id: req.params.id,
+        apiKeyId: req.apiKey.id,
+      }),
     })
   } catch (error) {
     next(error)

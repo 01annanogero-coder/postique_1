@@ -132,6 +132,8 @@ Copy `.env.example` to `.env`. The important values:
 | `PUBLIC_SEND_PER_MINUTE` | Per-IP public-key send limit (default `20`). |
 | `PUBLIC_KEY_PER_MINUTE` | Global per-public-key send limit across all IPs (default `60`). |
 | `PUBLIC_SEND_PER_DAY` | Per-public-key 24-hour send cap (default `500`). |
+| `PUBLIC_VERIFY_PER_HOUR` | Per-IP public-key verification-email limit (default `5`). |
+| `PUBLIC_VERIFY_PER_DAY` | Per-public-key 24-hour verification-email cap (default `20`). |
 | `ALLOW_PRIVATE_WEBHOOKS` | Allow webhooks to private/LAN addresses. Keep `false` on public servers. |
 | `WORKER_ENABLED` | Run the send/retry/webhook worker inside the API process. |
 | `WORKER_CONCURRENCY` | Jobs processed concurrently per worker process (default `1`). |
@@ -215,6 +217,8 @@ Useful endpoints:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/v1/send` | Send a template or raw HTML/text. |
+| `POST` | `/v1/verifications` | Public-key verification email for a visitor. |
+| `GET` | `/v1/verifications/:id` | Public-key verification status. |
 | `POST` | `/v1/threads/:id/reply` | Send a reply inside an existing thread (secret key). |
 | `PATCH` | `/v1/threads/:id` | Attach or clear the `external_user_id` that owns a thread (secret key). |
 | `GET` | `/v1/threads` | List conversations (secret key; end-users use `/embed/v1`). |
@@ -243,9 +247,23 @@ Public browser keys are intentionally narrow:
 
 Use a secret key from a trusted server for arbitrary customer recipients, conversation replies, campaigns or anything that needs the full API. A public key is not a replacement for server-side authorization.
 
-Browser SDK: load `/sdk/postique.js` and use a **public** key. Public keys require an allowed origin, at least one allowed published template and an explicit recipient allow-list. They cannot use `cc`, `bcc`, `thread_id` or `in_reply_to`, and they must send from an allowed browser `Origin`.
+### Verified visitor sends
 
-Public keys are for fixed, known recipients. If the recipient is arbitrary customer input, call the API with a secret key from your backend instead of trusting a browser key.
+For the EmailJS-style “send a receipt to the visitor who just submitted a form” flow, use a public key with the **verified visitor** recipient policy. The visitor must first prove ownership:
+
+1. Browser calls `POST /v1/verifications` with the public key and the visitor email.
+2. Postique sends a verification email. The request is linked to that public key and rate-limited per IP/day.
+3. The visitor opens the link. The browser polls `GET /v1/verifications/:id` until `status` is `verified`.
+4. Browser calls `POST /v1/send` with `verification_id` and exactly one `to` address. The proof must match the email, belong to the key, be unexpired and unused.
+5. The proof is consumed. A second send needs a new verification.
+
+The browser SDK exposes `verify()` and `verification()` alongside `send()`. Received proofs can still go to an address on the key's fixed recipient list without verification.
+
+This is double opt-in, not general public relay. It also means an attacker cannot make a browser key mail an arbitrary address that has not confirmed ownership.
+
+Browser SDK: load `/sdk/postique.js` and use a **public** key. Public keys require an allowed origin and at least one allowed published template. Fixed-recipient keys also require an explicit recipient allow-list; verified-visitor keys allow a new recipient only with a consumed verification proof. Public keys cannot use `cc`, `bcc`, `thread_id` or `in_reply_to`, and they must send from an allowed browser `Origin`.
+
+Fixed-recipient public keys are for known addresses. Verified-visitor public keys can reach a new address only after that visitor confirms ownership. For arbitrary recipients without double opt-in, use a secret key from your backend.
 
 ```html
 <script src="https://mail.example.com/sdk/postique.js"></script>
@@ -259,6 +277,21 @@ Public keys are for fixed, known recipients. If the recipient is arbitrary custo
     variables: { name: "Wanjiru" }
   });
 </script>
+```
+
+For a verified visitor, request the proof first and pass its ID with a single recipient:
+
+```js
+const { verification } = await postique.verify({
+  email: "visitor@example.com",
+  name: "Visitor",
+});
+// after the visitor confirms:
+await postique.send({
+  template: "receipt",
+  to: "visitor@example.com",
+  verification_id: verification.id,
+});
 ```
 
 ## Email verification without accounts

@@ -149,6 +149,7 @@ function CreateKeyModal({ open, onClose }) {
   const [origins, setOrigins] = useState(typeof window !== 'undefined' ? window.location.origin : '')
   const [allowedTemplates, setAllowedTemplates] = useState([])
   const [allowedRecipients, setAllowedRecipients] = useState('')
+  const [recipientPolicy, setRecipientPolicy] = useState('fixed')
   const [createdKey, setCreatedKey] = useState(null)
 
   useEffect(() => {
@@ -158,6 +159,7 @@ function CreateKeyModal({ open, onClose }) {
       setOrigins(typeof window !== 'undefined' ? window.location.origin : '')
       setAllowedTemplates([])
       setAllowedRecipients('')
+      setRecipientPolicy('fixed')
       setCreatedKey(null)
     }
   }, [open])
@@ -187,9 +189,9 @@ function CreateKeyModal({ open, onClose }) {
               Cancel
             </Button>
             <Button
-              disabled={kind === 'public' && (allowedTemplates.length === 0 || !allowedRecipients.trim())}
+              disabled={kind === 'public' && (allowedTemplates.length === 0 || (recipientPolicy === 'fixed' && !allowedRecipients.trim()))}
               onClick={async () => {
-                const secret = await addKey({ name, kind, origins, allowedTemplates, allowedRecipients })
+                const secret = await addKey({ name, kind, origins, allowedTemplates, allowedRecipients, recipientPolicy })
                 if (secret) setCreatedKey(secret)
               }}
               icon={<Plus size={14} />}
@@ -217,7 +219,13 @@ function CreateKeyModal({ open, onClose }) {
             </div>
             <div>
               <span>Scope</span>
-              <strong>{kind === 'public' ? 'Restricted · origin allow-list' : 'Full API access'}</strong>
+              <strong>
+                {kind === 'public'
+                  ? recipientPolicy === 'verified'
+                    ? 'Verified visitors · origin allow-list'
+                    : 'Fixed recipients · origin allow-list'
+                  : 'Full API access'}
+              </strong>
             </div>
           </div>
           <div className="key-created__note">
@@ -253,9 +261,24 @@ function CreateKeyModal({ open, onClose }) {
               <Field label="Allowed origins" hint="Comma-separated. Requests from any other origin will be rejected.">
                 <input className="input" value={origins} onChange={(event) => setOrigins(event.target.value)} placeholder="https://acme.co.ke" />
               </Field>
+              <Field
+                label="Visitor recipient policy"
+                hint={recipientPolicy === 'verified'
+                  ? 'Visitors confirm their address with a verification link before a receipt can be sent.'
+                  : 'Only the fixed recipient list below can receive email.'}
+              >
+                <select className="input" value={recipientPolicy} onChange={(event) => setRecipientPolicy(event.target.value)}>
+                  <option value="fixed">Fixed recipient list</option>
+                  <option value="verified">Verified visitor (double opt-in)</option>
+                </select>
+              </Field>
               <div className="field">
                 <span className="field__label">Allowed recipients</span>
-                <span className="field__hint">Comma-separated. Public keys can only send to these addresses.</span>
+                <span className="field__hint">
+                  {recipientPolicy === 'verified'
+                    ? 'Optional. These addresses bypass verification; new visitors still confirm ownership.'
+                    : 'Required. Public keys can only send to these addresses.'}
+                </span>
                 <textarea
                   className="input"
                   rows={3}
@@ -299,7 +322,7 @@ function CreateKeyModal({ open, onClose }) {
           <div className="create-key__note">
             <ShieldCheck size={13} />
             {kind === 'public'
-              ? 'Public sends are recipient-allow-listed, origin-bound, template-scoped and rate-limited on the server.'
+              ? 'Public sends are origin-bound, template-scoped, recipient-policy-controlled and rate-limited on the server.'
               : 'The key is hashed before storage. Postique cannot recover the original after creation.'}
           </div>
         </div>

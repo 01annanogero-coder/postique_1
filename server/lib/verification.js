@@ -67,6 +67,7 @@ export async function createVerificationRequest({
   metadata = {},
   fromEmail = '',
   subject,
+  apiKeyId = null,
   req,
 }) {
   const address = requireEmail(email)
@@ -118,8 +119,8 @@ export async function createVerificationRequest({
   db.prepare(
     `INSERT INTO verification_requests
       (id, workspace_id, email, name, template_version_id, redirect_url, metadata_json, token_hash,
-       status, ip, user_agent, created_at, expires_at, purge_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+       status, ip, user_agent, api_key_id, created_at, expires_at, purge_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     workspaceId,
@@ -131,6 +132,7 @@ export async function createVerificationRequest({
     hashToken(rawToken),
     req?.ip || null,
     String(req?.get('user-agent') || '').slice(0, 400),
+    apiKeyId,
     createdAt.toISOString(),
     expiresAt.toISOString(),
     purgeAt.toISOString(),
@@ -214,6 +216,51 @@ export function verificationView(row) {
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     verifiedAt: row.verified_at,
+    consumedAt: row.consumed_at || null,
+  }
+}
+
+export function getVerificationProof({ workspaceId, id, email, apiKeyId }) {
+  const row = getDb()
+    .prepare('SELECT * FROM verification_requests WHERE id = ? AND workspace_id = ?')
+    .get(String(id || ''), workspaceId)
+  if (
+    !row ||
+    row.status !== 'verified' ||
+    row.consumed_at ||
+    !row.api_key_id ||
+    row.api_key_id !== apiKeyId ||
+    normaliseEmail(row.email) !== normaliseEmail(email) ||
+    new Date(row.expires_at).getTime() <= Date.now()
+  ) {
+    throw fail(403, 'verification_proof_required', 'Verify this recipient before sending to them.')
+  }
+  return row
+}
+
+export function consumeVerificationProof({ workspaceId, id, email, apiKeyId }) {
+  const row = getVerificationProof({ workspaceId, id, email, apiKeyId })
+  const claimed = getDb()
+    .prepare('UPDATE verification_requests SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL')
+    .run(nowIso(), row.id)
+  if (claimed.changes !== 1) {
+    throw fail(409, 'verification_proof_used', 'This verification proof has already been used.')
+  }
+  return row
+}
+
+export function publicVerificationView({ workspaceId, id, apiKeyId }) {
+  const row = getDb()
+    .prepare('SELECT * FROM verification_requests WHERE id = ? AND workspace_id = ? AND api_key_id = ?')
+    .get(String(id || ''), workspaceId, apiKeyId)
+  if (!row) throw fail(404, 'verification_not_found', 'Verification request not found.')
+  return {
+    id: row.id,
+    email: row.email,
+    status: row.status,
+    expiresAt: row.expires_at,
+    verifiedAt: row.verified_at,
+    consumedAt: row.consumed_at || null,
   }
 }
 

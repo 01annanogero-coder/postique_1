@@ -367,7 +367,7 @@ export function StoreProvider({ children }) {
   )
 
   const addKey = useCallback(
-    async ({ name, kind, origins, allowedTemplates, allowedRecipients }) => {
+    async ({ name, kind, origins, allowedTemplates, allowedRecipients, recipientPolicy }) => {
       try {
         const result = await api.createKey({
           name,
@@ -384,6 +384,7 @@ export function StoreProvider({ children }) {
             typeof allowedRecipients === 'string'
               ? allowedRecipients.split(/[\s,]+/).map((email) => email.trim()).filter(Boolean)
               : allowedRecipients || [],
+          recipientPolicy,
         })
         setData((current) => ({ ...current, keys: [result.key, ...current.keys] }))
         toast('API key created', 'success', 'Copy it now — it is only shown once')

@@ -745,6 +745,7 @@ dashboardRouter.post('/keys', (req, res, next) => {
   try {
     const kind = req.body?.kind === 'public' ? 'public' : 'secret'
     const name = String(req.body?.name || (kind === 'public' ? 'Browser integration' : 'API key')).slice(0, 120)
+    const recipientPolicy = req.body?.recipientPolicy === 'verified' ? 'verified' : 'fixed'
     const origins = Array.isArray(req.body?.allowedOrigins) ? req.body.allowedOrigins.map(String) : []
     const recipientInput = Array.isArray(req.body?.allowedRecipients)
       ? req.body.allowedRecipients.map((email) => normaliseEmail(email)).filter(Boolean)
@@ -756,8 +757,8 @@ dashboardRouter.post('/keys', (req, res, next) => {
     if (allowedRecipients.length !== recipientInput.length) {
       return next(fail(400, 'invalid_allowed_recipient', 'Every allowed recipient must be a valid email address.'))
     }
-    if (kind === 'public' && allowedRecipients.length === 0) {
-      return next(fail(400, 'allowed_recipients_required', 'Public keys require at least one allowed recipient.'))
+    if (kind === 'public' && recipientPolicy === 'fixed' && allowedRecipients.length === 0) {
+      return next(fail(400, 'allowed_recipients_required', 'Fixed-recipient public keys require at least one allowed recipient.'))
     }
     if (allowedRecipients.length > 500) {
       return next(fail(400, 'too_many_allowed_recipients', 'A public key can have at most 500 allowed recipients.'))
@@ -776,8 +777,8 @@ dashboardRouter.post('/keys', (req, res, next) => {
     db().prepare(
       `INSERT INTO api_keys
         (id, workspace_id, name, kind, prefix, hash, allowed_origins_json, allowed_templates_json,
-         allowed_recipients_json, rate_limit, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         allowed_recipients_json, rate_limit, recipient_policy, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       workspaceId(req),
@@ -789,6 +790,7 @@ dashboardRouter.post('/keys', (req, res, next) => {
       JSON.stringify(Array.isArray(req.body?.allowedTemplates) ? req.body.allowedTemplates : []),
       JSON.stringify(allowedRecipients),
       Number(req.body?.rateLimit) || (kind === 'public' ? config.limits.publicSendPerMinute : 120),
+      recipientPolicy,
       createdAt,
     )
     res.status(201).json({

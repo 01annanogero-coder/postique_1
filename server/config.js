@@ -121,6 +121,8 @@ export const config = {
     publicSendPerMinute: number(process.env.PUBLIC_SEND_PER_MINUTE, 20),
     publicKeyPerMinute: number(process.env.PUBLIC_KEY_PER_MINUTE, 60),
     publicSendPerDay: number(process.env.PUBLIC_SEND_PER_DAY, 500),
+    publicVerifyPerHour: number(process.env.PUBLIC_VERIFY_PER_HOUR, 5),
+    publicVerifyPerDay: number(process.env.PUBLIC_VERIFY_PER_DAY, 20),
     maxAttachmentBytes: number(process.env.MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024),
     maxAssetBytes: number(process.env.MAX_ASSET_BYTES, 10 * 1024 * 1024),
   },

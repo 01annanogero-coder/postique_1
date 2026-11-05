@@ -40,6 +40,7 @@ export function createOutboundMessage({
   attachments = [],
   campaignId = null,
   campaignRecipientId = null,
+  verificationId = null,
   headers = {},
 }) {
   const db = getDb()
@@ -60,8 +61,8 @@ export function createOutboundMessage({
     `INSERT INTO messages
       (id, workspace_id, thread_id, direction, author_type, message_id, in_reply_to, references_json,
        from_email, from_name, to_json, cc_json, bcc_json, subject, html, text, status,
-       template_version_id, api_key_id, headers_json, is_test, created_at, campaign_id, campaign_recipient_id)
-     VALUES (?, ?, ?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+       template_version_id, api_key_id, headers_json, is_test, created_at, campaign_id, campaign_recipient_id, verification_id)
+     VALUES (?, ?, ?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     workspaceId,
@@ -85,6 +86,7 @@ export function createOutboundMessage({
     createdAt,
     campaignId,
     campaignRecipientId,
+    verificationId,
   )
   for (const attachment of attachments) {
     db.prepare(
