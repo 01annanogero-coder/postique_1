@@ -89,8 +89,19 @@
     return this.request('/v1/verifications', payload)
   }
 
-  Postique.prototype.verification = function (id) {
-    return this.request('/v1/verifications/' + encodeURIComponent(id))
+  Postique.prototype.verification = function (id, browserToken) {
+    return this.call('/v1/verifications/' + encodeURIComponent(id), {
+      method: 'GET',
+      headers: { 'x-postique-browser-token': browserToken || '' },
+    })
+  }
+
+  Postique.prototype.confirmCode = function (id, code, browserToken) {
+    return this.call('/v1/verifications/' + encodeURIComponent(id) + '/confirm-code', {
+      method: 'POST',
+      payload: { code: code, browser_token: browserToken || '' },
+      headers: { 'x-postique-browser-token': browserToken || '' },
+    })
   }
 
   Postique.prototype.render = function (slug, variables) {

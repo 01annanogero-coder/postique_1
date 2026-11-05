@@ -234,6 +234,7 @@ export function keyView(key) {
     allowedTemplates: parseJson(key.allowed_templates_json, []),
     allowedRecipients: parseJson(key.allowed_recipients_json, []),
     recipientPolicy: key.recipient_policy || 'fixed',
+    verificationTemplate: key.verification_template || '',
     rateLimit: key.rate_limit,
   }
 }

@@ -22,10 +22,12 @@ import {
 } from '../lib/public-key-policy.js'
 import {
   consumeVerificationProof,
+  confirmVerificationCode,
   createVerificationRequest,
   getVerificationProof,
   publicVerificationView,
 } from '../lib/verification.js'
+import { verifyPublicCaptcha } from '../lib/captcha.js'
 import {
   addCampaignRecipients,
   campaignAnalytics,
@@ -424,15 +426,16 @@ publicApiRouter.post('/verifications', async (req, res, next) => {
     assertPublicVerificationPolicy(req.apiKey)
     assertPublicDailyVerifyLimit(req.apiKey)
     rateLimit(req.apiKey, req, config.limits.publicVerifyPerHour, 60 * 60 * 1000, 'verify-ip')
-    if (req.body?.template) assertPublicTemplateAllowed(req.apiKey, req.body.template)
+    await verifyPublicCaptcha(req.body?.captcha_token, req.ip)
     const result = await createVerificationRequest({
       workspaceId: workspaceId(req),
       email: req.body?.email,
       name: req.body?.name,
-      template: req.body?.template || '',
+      template: req.apiKey.verification_template || '',
       redirectUrl: req.body?.redirect_url,
       metadata: req.body?.metadata,
       apiKeyId: req.apiKey.id,
+      allowedRedirectOrigins: parseJson(req.apiKey.allowed_origins_json, []),
       req,
     })
     res.status(202).json({
@@ -442,6 +445,7 @@ publicApiRouter.post('/verifications', async (req, res, next) => {
         status: result.status,
         expires_at: result.expiresAt,
       },
+      browser_token: result.browserToken,
       debug: result.debug || null,
     })
   } catch (error) {
@@ -453,13 +457,40 @@ publicApiRouter.get('/verifications/:id', (req, res, next) => {
   try {
     requirePublicKey(req)
     assertPublicOrigin(req.apiKey, req.get('origin'))
+    const browserToken = req.get('x-postique-browser-token') || String(req.query.browser_token || '')
     res.json({
       verification: publicVerificationView({
         workspaceId: workspaceId(req),
         id: req.params.id,
         apiKeyId: req.apiKey.id,
+        browserToken,
       }),
     })
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.post('/verifications/:id/confirm-code', (req, res, next) => {
+  try {
+    requirePublicKey(req)
+    assertPublicOrigin(req.apiKey, req.get('origin'))
+    const browserToken = req.get('x-postique-browser-token') || String(req.body?.browser_token || '')
+    const result = confirmVerificationCode({
+      workspaceId: workspaceId(req),
+      id: req.params.id,
+      apiKeyId: req.apiKey.id,
+      browserToken,
+      code: req.body?.code,
+      req,
+    })
+    const view = publicVerificationView({
+      workspaceId: workspaceId(req),
+      id: req.params.id,
+      apiKeyId: req.apiKey.id,
+      browserToken,
+    })
+    res.json({ verification: view, redirect_url: result.redirectUrl })
   } catch (error) {
     next(error)
   }

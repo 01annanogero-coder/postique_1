@@ -746,6 +746,20 @@ dashboardRouter.post('/keys', (req, res, next) => {
     const kind = req.body?.kind === 'public' ? 'public' : 'secret'
     const name = String(req.body?.name || (kind === 'public' ? 'Browser integration' : 'API key')).slice(0, 120)
     const recipientPolicy = req.body?.recipientPolicy === 'verified' ? 'verified' : 'fixed'
+    const verificationTemplate = String(req.body?.verificationTemplate || '').trim()
+    if (kind === 'public' && verificationTemplate) {
+      const template = db()
+        .prepare('SELECT * FROM templates WHERE workspace_id = ? AND (slug = ? OR id = ?)')
+        .get(workspaceId(req), verificationTemplate, verificationTemplate)
+      const version = template
+        ? db()
+            .prepare("SELECT 1 FROM template_versions WHERE template_id = ? AND status = 'published' LIMIT 1")
+            .get(template.id)
+        : null
+      if (!template || !version) {
+        return next(fail(400, 'invalid_verification_template', 'Choose a published verification template.'))
+      }
+    }
     const origins = Array.isArray(req.body?.allowedOrigins) ? req.body.allowedOrigins.map(String) : []
     const recipientInput = Array.isArray(req.body?.allowedRecipients)
       ? req.body.allowedRecipients.map((email) => normaliseEmail(email)).filter(Boolean)
@@ -777,8 +791,8 @@ dashboardRouter.post('/keys', (req, res, next) => {
     db().prepare(
       `INSERT INTO api_keys
         (id, workspace_id, name, kind, prefix, hash, allowed_origins_json, allowed_templates_json,
-         allowed_recipients_json, rate_limit, recipient_policy, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         allowed_recipients_json, rate_limit, recipient_policy, verification_template, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       workspaceId(req),
@@ -791,6 +805,7 @@ dashboardRouter.post('/keys', (req, res, next) => {
       JSON.stringify(allowedRecipients),
       Number(req.body?.rateLimit) || (kind === 'public' ? config.limits.publicSendPerMinute : 120),
       recipientPolicy,
+      verificationTemplate,
       createdAt,
     )
     res.status(201).json({

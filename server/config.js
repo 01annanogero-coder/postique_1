@@ -85,6 +85,8 @@ export const config = {
     tokenMinutes: number(process.env.VERIFY_TOKEN_MINUTES, 30),
     retentionHours: number(process.env.VERIFY_RETENTION_HOURS, 24),
     maxPerHour: number(process.env.VERIFY_MAX_PER_HOUR, 5),
+    proofMinutes: number(process.env.VERIFY_PROOF_MINUTES, 15),
+    turnstileSecret: process.env.TURNSTILE_SECRET_KEY || '',
     debugLinks: bool(process.env.VERIFY_DEBUG_LINKS, process.env.NODE_ENV !== 'production'),
   },
   campaigns: {

@@ -144,6 +144,8 @@ Copy `.env.example` to `.env`. The important values:
 | `EMBED_TOKEN_MINUTES` | Embedded inbox session lifetime (default `60`). |
 | `VERIFY_TOKEN_MINUTES` | Verification-link lifetime (default `30`). |
 | `VERIFY_RETENTION_HOURS` | How long verification records are retained (default `24`). |
+| `VERIFY_PROOF_MINUTES` | Lifetime of the signed Ed25519 proof (default `15`). |
+| `TURNSTILE_SECRET_KEY` | Optional Cloudflare Turnstile secret for public verification requests. |
 | `CAMPAIGN_BATCH_SIZE` | Recipients processed per campaign batch (default `50`). |
 | `CAMPAIGN_MAX_RECIPIENTS` | Per-campaign recipient cap (default `100000`). |
 | `CAMPAIGN_RETENTION_DAYS` | Recipient data retention (default `30`). |
@@ -282,17 +284,20 @@ Fixed-recipient public keys are for known addresses. Verified-visitor public key
 For a verified visitor, request the proof first and pass its ID with a single recipient:
 
 ```js
-const { verification } = await postique.verify({
+const { verification, browser_token } = await postique.verify({
   email: "visitor@example.com",
   name: "Visitor",
 });
-// after the visitor confirms:
+// after the visitor confirms, poll until status === "verified":
+const result = await postique.verification(verification.id, browser_token);
 await postique.send({
   template: "receipt",
   to: "visitor@example.com",
   verification_id: verification.id,
 });
 ```
+
+`result.verification.proof` is a short-lived Ed25519 JWT that can be attached to the form submission and verified by any backend or frontend using `/verify/v1/jwks.json`.
 
 ## Email verification without accounts
 
@@ -314,22 +319,61 @@ curl -X POST https://mail.example.com/verify/v1/requests \
   }'
 ```
 
-Template variables include `verify_url`, `email`, `name`, `workspace` and any metadata keys. The developer designs the email in Template Studio; a built-in fallback is used when no template is supplied.
+Template variables include `verify_url`, `verification_code`, `email`, `name`, `workspace` and any metadata keys. The developer designs the email in Template Studio; a built-in fallback is used when no template is supplied.
 
-The recipient opens `/verify/v1/confirm?token=...`, which marks the request verified and redirects to the stored redirect URL with `verification_id` and `verification=success`. The backend confirms the result:
+The email contains a link and a six-digit code. Opening `GET /verify/v1/confirm?token=...` shows a confirmation page and does **not** mark the address verified, so corporate link scanners cannot consume the link. The human clicks the button (a POST), which verifies and redirects to the stored redirect URL with `verification_id` and `verification=success`.
+
+The backend can confirm the result:
 
 ```http
 GET /verify/v1/requests/vrf_...
 Authorization: Bearer pq_live_...
 ```
 
-The verification record contains only the email, template choice, metadata and redirect. It is single-use, expires after 30 minutes, and is purged after 24 hours. Repeat submissions are allowed; there is no `user_exists` wall. A workspace webhook can subscribe to `verification.completed` if you prefer callbacks over polling.
+For frontend-only sites, use a public key with the **verified visitor** policy:
+
+```http
+POST /v1/verifications
+Authorization: Bearer pq_pub_...
+Origin: https://app.example.com
+
+{ "email": "visitor@example.com", "name": "Visitor" }
+```
+
+This returns `verification.id`, `browser_token`, and (in development) a debug link/code. The browser polls:
+
+```http
+GET /v1/verifications/vrf_...
+Authorization: Bearer pq_pub_...
+X-Postique-Browser-Token: <browser_token>
+Origin: https://app.example.com
+```
+
+Once verified, the response includes a signed `proof`. The code alternative is:
+
+```http
+POST /v1/verifications/vrf_.../confirm-code
+Authorization: Bearer pq_pub_...
+X-Postique-Browser-Token: <browser_token>
+Origin: https://app.example.com
+
+{ "code": "123456" }
+```
+
+The proof is an Ed25519 JWT with `iss`, `aud` (the browser origin), `sub`, `email`, `workspace_id`, `api_key_id`, `iat` and `exp`. Verify it using `/verify/v1/jwks.json`; no Postique secret is needed. The proof expires after 15 minutes and the verification record is purged after 24 hours.
+
+Public-key verification requests require the key’s fixed verification template or the built-in template. Optional Cloudflare Turnstile is enabled by setting `TURNSTILE_SECRET_KEY`; per-IP, per-key and per-email limits apply.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/verify/v1/requests` | Create an ephemeral verification request. |
-| `GET` | `/verify/v1/confirm?token=...` | Confirm from the email link. |
+| `POST` | `/verify/v1/requests` | Create a verification with a secret key. |
+| `GET` | `/verify/v1/confirm?token=...` | Human confirmation page (no state change). |
+| `POST` | `/verify/v1/confirm` | Confirm the link token from the page. |
 | `GET` | `/verify/v1/requests/:id` | Check status with a secret key. |
+| `GET` | `/verify/v1/jwks.json` | Public Ed25519 proof verification keys. |
+| `POST` | `/v1/verifications` | Create a public-key, browser-bound verification. |
+| `GET` | `/v1/verifications/:id` | Browser-bound status and proof. |
+| `POST` | `/v1/verifications/:id/confirm-code` | Confirm the emailed six-digit code. |
 
 Use **Application accounts** only when you need persistent users, passwords, JWTs and refresh sessions.
 

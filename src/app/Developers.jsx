@@ -150,6 +150,7 @@ function CreateKeyModal({ open, onClose }) {
   const [allowedTemplates, setAllowedTemplates] = useState([])
   const [allowedRecipients, setAllowedRecipients] = useState('')
   const [recipientPolicy, setRecipientPolicy] = useState('fixed')
+  const [verificationTemplate, setVerificationTemplate] = useState('')
   const [createdKey, setCreatedKey] = useState(null)
 
   useEffect(() => {
@@ -160,6 +161,7 @@ function CreateKeyModal({ open, onClose }) {
       setAllowedTemplates([])
       setAllowedRecipients('')
       setRecipientPolicy('fixed')
+      setVerificationTemplate('')
       setCreatedKey(null)
     }
   }, [open])
@@ -191,7 +193,7 @@ function CreateKeyModal({ open, onClose }) {
             <Button
               disabled={kind === 'public' && (allowedTemplates.length === 0 || (recipientPolicy === 'fixed' && !allowedRecipients.trim()))}
               onClick={async () => {
-                const secret = await addKey({ name, kind, origins, allowedTemplates, allowedRecipients, recipientPolicy })
+                const secret = await addKey({ name, kind, origins, allowedTemplates, allowedRecipients, recipientPolicy, verificationTemplate })
                 if (secret) setCreatedKey(secret)
               }}
               icon={<Plus size={14} />}
@@ -272,6 +274,16 @@ function CreateKeyModal({ open, onClose }) {
                   <option value="verified">Verified visitor (double opt-in)</option>
                 </select>
               </Field>
+              {recipientPolicy === 'verified' && (
+                <Field label="Verification email template" hint="Fixed at key creation. Use {{verify_url}} and {{verification_code}}.">
+                  <select className="input" value={verificationTemplate} onChange={(event) => setVerificationTemplate(event.target.value)}>
+                    <option value="">Built-in verification email</option>
+                    {publishedTemplates.map((template) => (
+                      <option key={template.id} value={template.slug}>{template.name}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               <div className="field">
                 <span className="field__label">Allowed recipients</span>
                 <span className="field__hint">
