@@ -5,7 +5,7 @@ import { logger } from './lib/logger.js'
 import { cleanupSessions } from './lib/auth.js'
 import { cleanupVerifications } from './lib/verification.js'
 import { cleanupCampaignRecipients } from './lib/campaigns.js'
-import { startInboundServer, stopInboundServer } from './lib/inbound.js'
+import { startInboundServer, stopInboundServer, cleanupUnmatchedInbound } from './lib/inbound.js'
 import { startWorker, stopWorker } from './lib/queue.js'
 
 getDb()
@@ -59,6 +59,10 @@ const sessionCleanup = setInterval(() => {
     cleanupSessions()
     cleanupVerifications()
     cleanupCampaignRecipients()
+    cleanupUnmatchedInbound()
+    getDb()
+      .prepare('DELETE FROM idempotency_keys WHERE created_at < ?')
+      .run(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
   } catch (error) {
     logger.warn({ error: error.message }, 'Session or verification cleanup failed')
   }

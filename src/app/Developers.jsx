@@ -142,8 +142,9 @@ function KeyRow({ apiKey, onRevoke }) {
 }
 
 function CreateKeyModal({ open, onClose }) {
-  const { addKey, templates } = useStore()
+  const { addKey, templates, domains } = useStore()
   const publishedTemplates = templates.filter((template) => template.publishedVersion || template.status === 'published')
+  const identities = (domains || []).flatMap((domain) => domain.identityRecords || [])
   const [kind, setKind] = useState('secret')
   const [name, setName] = useState('')
   const [origins, setOrigins] = useState(typeof window !== 'undefined' ? window.location.origin : '')
@@ -151,6 +152,7 @@ function CreateKeyModal({ open, onClose }) {
   const [allowedRecipients, setAllowedRecipients] = useState('')
   const [recipientPolicy, setRecipientPolicy] = useState('fixed')
   const [verificationTemplate, setVerificationTemplate] = useState('')
+  const [senderIdentity, setSenderIdentity] = useState('')
   const [createdKey, setCreatedKey] = useState(null)
 
   useEffect(() => {
@@ -162,6 +164,7 @@ function CreateKeyModal({ open, onClose }) {
       setAllowedRecipients('')
       setRecipientPolicy('fixed')
       setVerificationTemplate('')
+      setSenderIdentity('')
       setCreatedKey(null)
     }
   }, [open])
@@ -193,7 +196,7 @@ function CreateKeyModal({ open, onClose }) {
             <Button
               disabled={kind === 'public' && (allowedTemplates.length === 0 || (recipientPolicy === 'fixed' && !allowedRecipients.trim()))}
               onClick={async () => {
-                const secret = await addKey({ name, kind, origins, allowedTemplates, allowedRecipients, recipientPolicy, verificationTemplate })
+                const secret = await addKey({ name, kind, origins, allowedTemplates, allowedRecipients, recipientPolicy, verificationTemplate, senderIdentity })
                 if (secret) setCreatedKey(secret)
               }}
               icon={<Plus size={14} />}
@@ -262,6 +265,14 @@ function CreateKeyModal({ open, onClose }) {
             <>
               <Field label="Allowed origins" hint="Comma-separated. Requests from any other origin will be rejected.">
                 <input className="input" value={origins} onChange={(event) => setOrigins(event.target.value)} placeholder="https://acme.co.ke" />
+              </Field>
+              <Field label="Sender identity" hint="Public keys cannot choose a different From address per request.">
+                <select className="input" value={senderIdentity} onChange={(event) => setSenderIdentity(event.target.value)}>
+                  <option value="">First verified identity</option>
+                  {identities.map((identity) => (
+                    <option key={identity.from_email} value={identity.from_email}>{identity.from_email}</option>
+                  ))}
+                </select>
               </Field>
               <Field
                 label="Visitor recipient policy"

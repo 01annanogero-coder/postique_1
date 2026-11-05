@@ -16,6 +16,24 @@ import { notifyOwner } from './notify.js'
 import { enqueueWebhookEvent } from './webhooks.js'
 
 let smtpServer = null
+const inboundBuckets = new Map()
+
+function allowInboundIp(ip) {
+  const now = Date.now()
+  const windowMs = 60 * 60 * 1000
+  const bucket = inboundBuckets.get(ip)
+  if (!bucket || bucket.resetAt < now) {
+    inboundBuckets.set(ip, { count: 1, resetAt: now + windowMs })
+    return true
+  }
+  bucket.count += 1
+  return bucket.count <= config.inbound.ratePerHour
+}
+
+setInterval(() => {
+  const now = Date.now()
+  for (const [ip, bucket] of inboundBuckets) if (bucket.resetAt < now) inboundBuckets.delete(ip)
+}, 5 * 60 * 1000).unref()
 
 function addressOf(value) {
   const source = value?.value ? value.value : value
@@ -51,6 +69,35 @@ function safeHtml(html) {
       a: ['href', 'title', 'target', 'rel'],
       img: ['src', 'alt', 'width', 'height', 'data-blocked-src'],
       '*': ['style', 'class'],
+    },
+    allowedStyles: {
+      '*': {
+        color: [/^#[0-9a-f]{3,8}$/i, /^rgba?\([\d\s.,%]+\)$/i, /^[a-z]+$/i],
+        'background-color': [/^#[0-9a-f]{3,8}$/i, /^rgba?\([\d\s.,%]+\)$/i, /^[a-z]+$/i],
+        'font-size': [/^\d+(\.\d+)?(px|em|rem|%)$/],
+        'font-weight': [/^(normal|bold|[1-9]00)$/],
+        'font-style': [/^(normal|italic)$/],
+        'text-align': [/^(left|right|center|justify)$/],
+        'text-decoration': [/^(none|underline|line-through)$/],
+        'line-height': [/^\d+(\.\d+)?(px|em|rem|%)?$/],
+        margin: [/^[\d\s.]+(px|em|rem|%)?$/],
+        'margin-top': [/^[\d.]+(px|em|rem|%)$/],
+        'margin-right': [/^[\d.]+(px|em|rem|%)$/],
+        'margin-bottom': [/^[\d.]+(px|em|rem|%)$/],
+        'margin-left': [/^[\d.]+(px|em|rem|%)$/],
+        padding: [/^[\d\s.]+(px|em|rem|%)?$/],
+        'padding-top': [/^[\d.]+(px|em|rem|%)$/],
+        'padding-right': [/^[\d.]+(px|em|rem|%)$/],
+        'padding-bottom': [/^[\d.]+(px|em|rem|%)$/],
+        'padding-left': [/^[\d.]+(px|em|rem|%)$/],
+        border: [/^[\d\w\s#.,()-]+$/],
+        'border-radius': [/^[\d.]+(px|em|rem|%)$/],
+        width: [/^\d+(\.\d+)?(px|em|rem|%)$/],
+        'max-width': [/^\d+(\.\d+)?(px|em|rem|%)$/],
+        height: [/^\d+(\.\d+)?(px|em|rem|%)$/],
+        'max-height': [/^\d+(\.\d+)?(px|em|rem|%)$/],
+        display: [/^(block|inline|inline-block|table|table-row|table-cell|none)$/],
+      },
     },
     allowedSchemes: ['http', 'https', 'mailto', 'cid', 'data'],
     transformTags: {
@@ -117,20 +164,9 @@ function findThread({ recipients, parsed, from, workspaceId }) {
     if (thread) return { thread, method: 'reply_address', workspaceId: thread.workspace_id }
   }
 
-  const threshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-  const normalizedSubject = String(parsed.subject || '').replace(/^(\s*re\s*:\s*)+/i, '').trim()
-  if (from.email) {
-    const candidate = db
-      .prepare(
-        `SELECT * FROM threads
-         WHERE workspace_id = ? AND customer_email = ? COLLATE NOCASE
-           AND lower(trim(subject)) = lower(trim(?))
-           AND last_activity_at >= ?
-         ORDER BY last_activity_at DESC LIMIT 1`,
-      )
-      .get(workspaceId, from.email, normalizedSubject, threshold)
-    if (candidate) return { thread: candidate, method: 'subject', workspaceId: candidate.workspace_id }
-  }
+  // Do not fall back to sender + subject: a forged From header could otherwise
+  // inject a message into another customer's conversation. Unmatched mail stays
+  // in the inbox for manual linking.
   return { thread: null, method: 'none', workspaceId }
 }
 
@@ -143,13 +179,18 @@ function recordBounce({ parsed, originalId, failedRecipient, workspaceId }) {
       .get(originalId, originalId, workspaceId)
   }
   if (!original && failedRecipient) {
-    original = db
+    const recent = db
       .prepare(
         `SELECT * FROM messages
-         WHERE workspace_id = ? AND direction = 'out' AND to_json LIKE ?
-         ORDER BY created_at DESC LIMIT 1`,
+         WHERE workspace_id = ? AND direction = 'out'
+         ORDER BY created_at DESC LIMIT 200`,
       )
-      .get(workspaceId, `%${failedRecipient}%`)
+      .all(workspaceId)
+    original = recent.find((message) =>
+      parseJson(message.to_json, []).some(
+        (recipient) => normaliseEmail(recipient.email) === normaliseEmail(failedRecipient),
+      ),
+    )
   }
   if (!original) {
     logger.warn({ originalId, failedRecipient }, 'Received a delivery failure that could not be matched')
@@ -330,13 +371,15 @@ export async function processEmail(raw, envelope = {}) {
     (/multipart\/report/i.test(contentType) && /delivery-status/i.test(contentType)) ||
     /delivery status notification|undelivered mail|mail delivery failed/i.test(parsed.subject || '')
   const isComplaint = /feedback-report/i.test(contentType) || /abuse report/i.test(parsed.subject || '')
+  const envelopeSender = envelope?.mailFrom?.address || envelope?.from || ''
+  const trustedReport = envelope?.trusted === true || !envelopeSender || envelopeSender === '<>'
   const originalId =
     parsed.headers.get('x-postique-message') ||
     parsed.headers.get('x-postique-message-id') ||
     (parsed.text || '').match(/X-Postique-Message:\s*<?([^>\s]+)>?/i)?.[1] ||
     null
 
-  if (isBounce) {
+  if (isBounce && trustedReport) {
     const text = `${parsed.text || ''}\n${parsed.html || ''}`
     const failed =
       text.match(/Final-Recipient:\s*rfc822;\s*([^\s<>]+@[^\s<>]+)/i)?.[1] ||
@@ -344,7 +387,7 @@ export async function processEmail(raw, envelope = {}) {
       null
     recordBounce({ parsed, originalId: originalId ? stripAngles(originalId) : null, failedRecipient: failed, workspaceId })
   }
-  if (isComplaint) {
+  if (isComplaint && trustedReport) {
     recordComplaint({ parsed, workspaceId })
   }
 
@@ -484,6 +527,16 @@ export async function processEmail(raw, envelope = {}) {
   return { threadId: thread.id, messageId: id, matchedBy: found.method, bounce: isBounce, complaint: isComplaint }
 }
 
+export function cleanupUnmatchedInbound() {
+  return getDb()
+    .prepare(
+      `DELETE FROM threads
+       WHERE matched = 0 AND created_at < ?
+         AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = threads.id AND m.direction = 'out')`,
+    )
+    .run(new Date(Date.now() - config.inbound.retentionDays * 24 * 60 * 60 * 1000).toISOString())
+}
+
 export function startInboundServer() {
   if (!config.inbound.enabled) {
     logger.info('Inbound SMTP server disabled by configuration')
@@ -493,11 +546,22 @@ export function startInboundServer() {
     name: config.inbound.domain,
     banner: `Postique inbound SMTP for ${config.inbound.domain}`,
     size: config.inbound.maxSize,
+    maxClients: config.inbound.maxClients,
     authOptional: true,
     disabledCommands: ['AUTH'],
     hideSTARTTLS: !config.inbound.tlsKey || !config.inbound.tlsCert,
+    onRcptTo(address, session, callback) {
+      const email = normaliseEmail(address.address)
+      if (!email.endsWith(`@${config.inbound.domain}`)) {
+        return callback(Object.assign(new Error('Relay access denied for this recipient.'), { responseCode: 550 }))
+      }
+      if (!allowInboundIp(session.remoteAddress || 'unknown')) {
+        return callback(Object.assign(new Error('Too many inbound messages from this client.'), { responseCode: 452 }))
+      }
+      return callback()
+    },
     onData(stream, session, callback) {
-      processEmail(stream, session)
+      processEmail(stream, { ...(session.envelope || {}), trusted: false })
         .then((result) => {
           logger.info({ result }, 'Inbound SMTP message accepted')
           callback(null, '250 Message accepted for delivery')

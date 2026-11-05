@@ -12,11 +12,14 @@ import {
   updateSessionUser,
   verifyAuthToken,
   consumeAuthTokenByRaw,
+  lookupAuthToken,
   appUserView,
 } from '../lib/app-auth.js'
-import { apiCors, authenticateApiKey } from '../lib/api-auth.js'
+import { apiCors, authenticateApiKey, rateLimit } from '../lib/api-auth.js'
 import { fail } from '../lib/http.js'
 import { authSettings } from '../lib/workspace.js'
+import { assertPublicAuthRecipient, assertPublicOrigin } from '../lib/public-key-policy.js'
+import { verifyPublicCaptcha } from '../lib/captcha.js'
 
 export const authApiRouter = express.Router()
 
@@ -27,6 +30,14 @@ function bearer(req) {
 
 function allowedOrigins(req) {
   return parseJson(req.apiKey?.allowed_origins_json, [])
+}
+
+async function publicAuthGuard(req, email) {
+  if (req.apiKey.kind !== 'public') return
+  assertPublicOrigin(req.apiKey, req.get('origin'))
+  assertPublicAuthRecipient(req.apiKey, email)
+  rateLimit(req.apiKey, req, config.limits.publicAuthPerDay, 24 * 60 * 60 * 1000, 'auth-day')
+  await verifyPublicCaptcha(req.body?.captcha_token, req.ip)
 }
 
 function redirectWithSession(res, result) {
@@ -42,11 +53,35 @@ function redirectWithSession(res, result) {
   return res.redirect(302, destination.toString())
 }
 
-// A magic link is opened directly by the recipient's browser, so this endpoint
-// authenticates with the single-use token rather than an API key.
-authApiRouter.get('/verify', apiCors, (req, res, next) => {
+function escape(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function confirmPage(title, message, token = '') {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title></head><body style="margin:0;background:#f3f0e8;font-family:system-ui,sans-serif;color:#20251f"><main style="max-width:480px;margin:12vh auto;background:#fffefa;border:1px solid #e2ddd1;border-radius:14px;padding:32px"><div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8e9588">Postique</div><h1 style="font-size:26px;margin:12px 0 8px">${escape(title)}</h1><p style="font-size:14px;line-height:1.65;color:#687262;margin:0">${escape(message)}</p>${token ? `<form method="post" action="/auth/v1/verify/confirm" style="margin-top:24px"><input type="hidden" name="token" value="${escape(token)}"><button type="submit" style="border:0;border-radius:7px;padding:12px 18px;background:#171b17;color:#fff;font:inherit;font-weight:700;cursor:pointer">Sign in</button></form>` : ''}</main></body></html>`
+}
+
+// Magic links are opened by mail clients and link scanners. GET only renders a
+// page; the human click submits the POST that consumes the single-use token.
+authApiRouter.get('/verify', apiCors, (req, res) => {
   try {
-    const result = consumeAuthTokenByRaw({ token: req.query.token, req })
+    lookupAuthToken(req.query.token)
+    return res.type('html').send(
+      confirmPage('Sign in to Postique', 'Click the button below to finish signing in.', req.query.token),
+    )
+  } catch (error) {
+    return res.status(error.status || 400).type('html').send(confirmPage('That link did not work', error.message))
+  }
+})
+
+authApiRouter.post('/verify/confirm', apiCors, (req, res, next) => {
+  try {
+    const result = consumeAuthTokenByRaw({ token: req.body?.token, req })
     return redirectWithSession(res, result)
   } catch (error) {
     return next(error)
@@ -84,6 +119,7 @@ authApiRouter.post('/signup', async (req, res, next) => {
     if (!req.body?.password) {
       return next(fail(400, 'password_required', 'A password is required for signup. Use /auth/v1/otp for magic-link signup.'))
     }
+    await publicAuthGuard(req, req.body.email)
     const result = await signUp({
       workspaceId: req.workspaceId,
       email: req.body.email,
@@ -179,6 +215,7 @@ authApiRouter.put('/user', (req, res, next) => {
 
 async function sendLink(req, res, next, purpose) {
   try {
+    await publicAuthGuard(req, req.body?.email)
     const result = await requestAuthLink({
       workspaceId: req.workspaceId,
       email: req.body?.email,
@@ -208,6 +245,7 @@ authApiRouter.post('/recover', (req, res, next) => sendLink(req, res, next, 'rec
 
 authApiRouter.post('/verify', (req, res, next) => {
   try {
+    if (req.apiKey.kind === 'public') assertPublicOrigin(req.apiKey, req.get('origin'))
     const result = verifyAuthToken({
       workspaceId: req.workspaceId,
       token: req.body?.token || req.body?.code,

@@ -23,7 +23,7 @@ import { unsubscribeRecipient } from './lib/unsubscribe.js'
 export const app = express()
 
 app.disable('x-powered-by')
-app.set('trust proxy', 1)
+app.set('trust proxy', config.trustProxy)
 app.use(
   pinoHttp({
     logger,
@@ -34,6 +34,17 @@ app.use(
       if (error || res.statusCode >= 500) return 'error'
       if (res.statusCode >= 400) return 'warn'
       return 'info'
+    },
+    serializers: {
+      req(req) {
+        return {
+          id: req.id,
+          method: req.method,
+          url: String(req.url || '').split('?')[0],
+          remoteAddress: req.remoteAddress,
+          remotePort: req.remotePort,
+        }
+      },
     },
   }),
 )
@@ -93,7 +104,7 @@ app.post(
         .map((email) => email.trim())
         .filter(Boolean)
         .map((address) => ({ address }))
-      const result = await processEmail(req.body, { rcptTo: recipients })
+      const result = await processEmail(req.body, { rcptTo: recipients, trusted: true })
       return res.status(202).json({ ok: true, ...result })
     } catch (error) {
       return next(error)

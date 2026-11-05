@@ -37,6 +37,18 @@ export function assertPublicRecipientPolicy(key, recipients, { verificationEmail
   }
 }
 
+export function assertPublicAuthRecipient(key, email) {
+  if (key.kind !== 'public') return
+  if (key.recipient_policy === 'verified') return
+  const allowed = publicAllowedRecipients(key)
+  if (!allowed.length) {
+    throw fail(403, 'recipient_policy_required', 'This public key has no approved recipients.')
+  }
+  if (!allowed.includes(String(email || '').toLowerCase())) {
+    throw fail(403, 'recipient_not_allowed', 'This public key cannot email that address.')
+  }
+}
+
 export function assertPublicVerificationPolicy(key) {
   if (key.kind !== 'public') return
   if (key.recipient_policy !== 'verified') {

@@ -4,6 +4,7 @@ import { constantTimeEqual, hashApiKey } from './crypto.js'
 import { fail } from './http.js'
 
 const buckets = new Map()
+const lastUsedWrites = new Map()
 
 function keyFromRequest(req) {
   const authorization = req.get('authorization') || ''
@@ -65,7 +66,7 @@ export function authenticateApiKey(req, _res, next) {
       return next(fail(401, 'invalid_api_key', 'A valid Postique API key is required.'))
     }
     const db = getDb()
-    const record = db.prepare('SELECT * FROM api_keys WHERE prefix = ?').get(key.slice(0, 13))
+    const record = db.prepare('SELECT * FROM api_keys WHERE hash = ?').get(hashApiKey(key))
     if (!record || record.revoked_at) {
       return next(fail(401, 'invalid_api_key', 'This API key is invalid or has been revoked.'))
     }
@@ -87,7 +88,11 @@ export function authenticateApiKey(req, _res, next) {
       rateLimit(record, req, config.limits.publicKeyPerMinute, 60_000, 'key')
     }
 
-    db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(nowIso(), record.id)
+    const lastWrite = lastUsedWrites.get(record.id) || 0
+    if (Date.now() - lastWrite > 60_000) {
+      db.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(nowIso(), record.id)
+      lastUsedWrites.set(record.id, Date.now())
+    }
     req.apiKey = record
     req.workspace = workspace
     req.workspaceId = workspace.id
@@ -108,6 +113,7 @@ export function apiKeyView(record) {
     allowedRecipients: parseJson(record.allowed_recipients_json, []),
     recipientPolicy: record.recipient_policy || 'fixed',
     verificationTemplate: record.verification_template || '',
+    senderIdentity: record.sender_identity_email || '',
     rateLimit: record.rate_limit,
     createdAt: record.created_at,
     lastUsedAt: record.last_used_at,

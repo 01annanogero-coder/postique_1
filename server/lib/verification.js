@@ -101,6 +101,8 @@ export async function createVerificationRequest({
   const verifyUrl = `${config.appUrl}/verify/v1/confirm?token=${encodeURIComponent(rawToken)}`
   const version = publishedTemplate(workspaceId, templateReference)
   const meta = metadata && typeof metadata === 'object' ? metadata : {}
+  const metaJson = JSON.stringify(meta)
+  if (metaJson.length > 4096) throw fail(400, 'metadata_too_large', 'Verification metadata is too large.')
   const variables = {
     ...meta,
     email: address,
@@ -143,7 +145,7 @@ export async function createVerificationRequest({
     String(name || '').slice(0, 120),
     version?.id || null,
     safeRedirect(redirectUrl, allowedRedirectOrigins),
-    JSON.stringify(meta),
+    metaJson,
     hashToken(rawToken),
     req?.ip || null,
     String(req?.get('user-agent') || '').slice(0, 400),

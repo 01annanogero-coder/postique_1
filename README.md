@@ -118,6 +118,10 @@ Copy `.env.example` to `.env`. The important values:
 | `SECURE_COOKIES` | Set `true` when serving over HTTPS. |
 | `INBOUND_SMTP_ENABLED` | Start the built-in inbound SMTP listener. |
 | `INBOUND_SMTP_PORT` | Inbound SMTP port (default `2525`; use `25` on a public MX host). |
+| `INBOUND_MAX_BYTES` | Maximum accepted message size (default 25 MB). |
+| `INBOUND_MAX_CLIENTS` | Maximum concurrent inbound SMTP clients (default `25`). |
+| `INBOUND_RATE_PER_HOUR` | Per-IP inbound message limit (default `100`). |
+| `INBOUND_RETENTION_DAYS` | Delete unmatched inbound threads after this window (default `30`). |
 | `INBOUND_DOMAIN` | Domain used for reply addresses, e.g. `in.example.com`. |
 | `INBOUND_TLS_KEY` / `INBOUND_TLS_CERT` | Optional STARTTLS key/certificate. |
 | `INBOUND_HTTP_SECRET` | Optional secret for the raw HTTP inbound bridge used by Postfix/Haraka. |
@@ -128,12 +132,14 @@ Copy `.env.example` to `.env`. The important values:
 | `MAIL_ADAPTER_TIMEOUT_MS` | HTTP mail adapter timeout (default `20000`). |
 | `SPF_RECORD` | SPF record shown in domain setup. Match your actual sending path. |
 | `DKIM_SELECTOR` | DKIM selector (default `postique`). |
+| `TRUST_PROXY` | Express trust-proxy setting. Leave `false` for direct exposure; set only when a trusted proxy terminates requests. |
 | `SEND_LIMIT_PER_HOUR` / `MONTHLY_SEND_LIMIT` | Local sending limits. |
 | `PUBLIC_SEND_PER_MINUTE` | Per-IP public-key send limit (default `20`). |
 | `PUBLIC_KEY_PER_MINUTE` | Global per-public-key send limit across all IPs (default `60`). |
 | `PUBLIC_SEND_PER_DAY` | Per-public-key 24-hour send cap (default `500`). |
 | `PUBLIC_VERIFY_PER_HOUR` | Per-IP public-key verification-email limit (default `5`). |
 | `PUBLIC_VERIFY_PER_DAY` | Per-public-key 24-hour verification-email cap (default `20`). |
+| `PUBLIC_AUTH_PER_DAY` | Per-public-key 24-hour auth-email cap (default `100`). |
 | `ALLOW_PRIVATE_WEBHOOKS` | Allow webhooks to private/LAN addresses. Keep `false` on public servers. |
 | `WORKER_ENABLED` | Run the send/retry/webhook worker inside the API process. |
 | `WORKER_CONCURRENCY` | Jobs processed concurrently per worker process (default `1`). |
@@ -174,7 +180,9 @@ Point the MX record for your inbound domain at this host. For a public deploymen
 t_<thread-token>@in.example.com
 ```
 
-Replies are matched by `In-Reply-To`/`References` first, then the reply token, then sender + subject. Unmatched mail is never discarded; it appears in the inbox for manual linking.
+Replies are matched by `In-Reply-To`/`References` first, then the reply token. Sender + subject fallback is deliberately disabled so a forged `From` cannot inject into another customer's thread. Unmatched mail is kept for manual linking and purged after `INBOUND_RETENTION_DAYS`.
+
+The SMTP listener only accepts recipients under `INBOUND_DOMAIN`, limits concurrent clients and per-IP message rate, and enforces `INBOUND_MAX_BYTES`. Bounce and complaint reports are only acted on when the envelope sender is null (or the request arrives through the secret-authenticated HTTP pipe); a forged “Undelivered Mail” message with a normal envelope sender is stored but cannot add suppressions.
 
 For Postfix, Haraka or another MTA, you can instead pipe raw MIME to:
 
@@ -242,9 +250,9 @@ Useful endpoints:
 Public browser keys are intentionally narrow:
 
 - A key must have at least one allowed recipient, one allowed published template and one allowed origin.
-- The `Origin` header is required and must match the allow-list. A copied key cannot be used from curl.
+- The `Origin` header is required and must match the allow-list. This stops other websites' browsers, but a non-browser client can spoof the header; recipient/template allow-lists and caps are the real controls.
 - Public keys cannot use `cc`, `bcc`, `thread_id` or `in_reply_to`.
-- Sends are limited per IP, globally per key and to a 24-hour per-key cap (`PUBLIC_SEND_PER_DAY`).
+- Sends are limited per IP, globally per key and to a 24-hour per-key cap (`PUBLIC_SEND_PER_DAY`). The per-IP limit is intentionally lower than the global key bucket, so one leaked key cannot be trivially exhausted by a single source.
 - The workspace hourly/monthly limits remain the final backstop.
 
 Use a secret key from a trusted server for arbitrary customer recipients, conversation replies, campaigns or anything that needs the full API. A public key is not a replacement for server-side authorization.
@@ -481,6 +489,8 @@ All endpoints are under `/auth/v1` and use the same public key as the browser SD
 
 A session response contains `access_token`, `refresh_token`, `token_type`, `expires_in`, `expires_at` and `user`. The access token is an HS256 JWT signed with a key derived from `APP_SECRET`; refresh tokens are stored hashed and rotate on every use. Revoking a session makes its access token unusable immediately.
 
+Public auth email endpoints now require an allowed `Origin`, a valid public-key recipient policy (fixed list or verified-visitor policy), the per-key `PUBLIC_AUTH_PER_DAY` cap, and the optional Turnstile challenge. `/signup`, `/otp`, `/magiclink` and `/recover` cannot be driven as an unauthenticated arbitrary-email relay. For public signup, use a **verified visitor** public key; fixed-recipient keys only accept their approved addresses.
+
 ### Browser SDK
 
 ```html
@@ -527,7 +537,9 @@ Users can be disabled or deleted without affecting the workspace owner account. 
 
 ### Magic-link redirects
 
-Pass a `redirect_to` value when requesting a link. It is validated against the public key’s allowed origins and stored with the token. After verification the browser is redirected to that URL with the session in the URL fragment:
+Magic-link emails point at `/auth/v1/verify?token=...`. That GET request only renders a confirmation page; the human POST to `/auth/v1/verify/confirm` consumes the single-use token. Mail scanners therefore cannot burn a link or receive a session.
+
+Pass a `redirect_to` value when requesting a link. It is validated against the public key’s allowed origins and stored with the token. After confirmation the browser is redirected to that URL with the session in the URL fragment:
 
 ```
 #access_token=...&refresh_token=...&token_type=bearer&expires_in=3600&type=magiclink
@@ -626,10 +638,10 @@ document.querySelector('postique-inbox').addEventListener('postique:reply.sent',
 | `GET` | `/embed/v1/session` | Read the current embedded user. |
 | `GET` | `/embed/v1/threads` | List only this external user’s conversations. |
 | `GET` | `/embed/v1/threads/:id` | Read one owned conversation; marks it read. |
-| `POST` | `/embed/v1/threads/:id/messages` | Send a reply. |
+| `POST` | `/embed/v1/threads/:id/messages` | Append a customer message to the support thread (inbound, no outbound send). |
 | `GET` | `/embed/v1/attachments/:id?token=...` | Access an attachment owned by this user. |
 
-All embed routes use the short-lived token, not the workspace secret. The token’s origin claim is checked for browser requests, and attachments are scoped to the same user. The headless API is the same data used by the prebuilt widget, so you can build a completely custom UI.
+All embed routes use the short-lived token, not the workspace secret. The token’s origin claim is checked for browser requests, and attachments are scoped to the same user. The headless API is the same data used by the prebuilt widget, so you can build a completely custom UI. A widget message is stored as an inbound customer message, emits `thread.reply_received` and notifies the owner; it does not send email back to the customer from the support identity.
 
 ## Webhooks
 
@@ -643,7 +655,7 @@ X-Postique-Signature: sha256=<hex>
 
 Verify the signature against the raw request body using the webhook secret shown once at creation. Events: `message.sent`, `message.failed`, `message.bounced`, `message.complained`, `thread.reply_received`, `verification.completed`, `campaign.scheduled`, `campaign.started`, `campaign.paused`, `campaign.resumed`, `campaign.completed`, `campaign.cancelled`.
 
-Destinations are DNS-resolved and rejected if any address is private, loopback, link-local or CGNAT. Redirects are not followed. Set `ALLOW_PRIVATE_WEBHOOKS=true` only for local development.
+Destinations are DNS-resolved, private/loopback/link-local/CGNAT addresses are rejected, and the checked IP is pinned for the actual request. Redirects are not followed. Set `ALLOW_PRIVATE_WEBHOOKS=true` only for local development.
 
 ## Operations
 

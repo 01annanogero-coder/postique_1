@@ -368,7 +368,7 @@
           ? ''
           : '<div class="pi-compose"><textarea id="pi-reply" placeholder="Write a reply…" maxlength="10000">' +
             escape(this.state.reply) +
-            '</textarea><div class="pi-compose-row"><span>Reply by email</span><button class="pi-send" data-action="send" ' +
+            '</textarea><div class="pi-compose-row"><span>Send to support</span><button class="pi-send" data-action="send" ' +
             (this.state.sending || !this.state.reply.trim() ? 'disabled' : '') +
             '>' +
             (this.state.sending ? 'Sending…' : 'Send reply') +

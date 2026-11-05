@@ -101,6 +101,9 @@ export const config = {
     port: number(process.env.INBOUND_SMTP_PORT, 2525),
     domain: inboundDomain,
     maxSize: number(process.env.INBOUND_MAX_BYTES, 25 * 1024 * 1024),
+    maxClients: number(process.env.INBOUND_MAX_CLIENTS, 25),
+    ratePerHour: number(process.env.INBOUND_RATE_PER_HOUR, 100),
+    retentionDays: number(process.env.INBOUND_RETENTION_DAYS, 30),
     tlsKey: pemValue(process.env.INBOUND_TLS_KEY || ''),
     tlsCert: pemValue(process.env.INBOUND_TLS_CERT || ''),
     httpSecret: process.env.INBOUND_HTTP_SECRET || '',
@@ -125,6 +128,7 @@ export const config = {
     publicSendPerDay: number(process.env.PUBLIC_SEND_PER_DAY, 500),
     publicVerifyPerHour: number(process.env.PUBLIC_VERIFY_PER_HOUR, 5),
     publicVerifyPerDay: number(process.env.PUBLIC_VERIFY_PER_DAY, 20),
+    publicAuthPerDay: number(process.env.PUBLIC_AUTH_PER_DAY, 100),
     maxAttachmentBytes: number(process.env.MAX_ATTACHMENT_BYTES, 10 * 1024 * 1024),
     maxAssetBytes: number(process.env.MAX_ASSET_BYTES, 10 * 1024 * 1024),
   },
@@ -142,6 +146,13 @@ export const config = {
     timeoutMs: number(process.env.WEBHOOK_TIMEOUT_MS, 10000),
   },
   logLevel: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
+  trustProxy: (() => {
+    const value = String(process.env.TRUST_PROXY || '').trim()
+    if (!value || value === 'false' || value === '0') return false
+    if (value === 'true') return true
+    const hops = Number(value)
+    return Number.isFinite(hops) ? hops : value
+  })(),
 }
 
 for (const directory of [config.dataDir, config.uploadsDir, config.attachmentsDir, config.outboxDir]) {

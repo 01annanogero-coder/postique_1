@@ -41,6 +41,7 @@ import {
   startCampaign,
 } from '../lib/campaigns.js'
 import { parseCampaignCsv } from '../lib/campaign-csv.js'
+import { filterSuppressed } from '../lib/recipient-filter.js'
 
 export const publicApiRouter = express.Router()
 
@@ -143,7 +144,7 @@ async function prepareContent(req, body) {
     return {
       html: compiled.html,
       text: htmlToText(compiled.html),
-      subject: renderSubject(body.subject || version.subject || '', variables),
+      subject: renderSubject(req.apiKey.kind === 'public' ? version.subject || '' : body.subject || version.subject || '', variables),
       templateVersionId: version.id,
       templateName: template.name,
     }
@@ -162,20 +163,51 @@ async function prepareContent(req, body) {
   }
 }
 
-function idempotencyCheck(wsId, key, requestHash) {
-  if (!key) return null
-  const record = getDb()
+function idempotencyRecord(wsId, key) {
+  return getDb()
     .prepare('SELECT * FROM idempotency_keys WHERE workspace_id = ? AND key = ?')
     .get(wsId, key)
+}
+
+export function idempotencyLookup(wsId, key, requestHash) {
+  if (!key) return null
+  const record = idempotencyRecord(wsId, key)
   if (!record) return null
   if (record.request_hash !== requestHash) {
     throw fail(409, 'idempotency_conflict', 'This idempotency key was used with a different request.')
   }
-  return parseJson(record.response_json, null)
+  const response = parseJson(record.response_json, null)
+  if (!response || !response.id) {
+    throw fail(409, 'idempotency_in_progress', 'A request with this idempotency key is still being processed.')
+  }
+  return response
 }
 
-function idempotencyStore(wsId, key, requestHash, message) {
+export function idempotencyReserve(wsId, key, requestHash) {
+  if (!key) return { reserved: false, cached: null }
+  const db = getDb()
+  const inserted = db
+    .prepare(
+      `INSERT INTO idempotency_keys (workspace_id, key, request_hash, message_id, response_json, created_at)
+       VALUES (?, ?, ?, NULL, '{}', ?)
+       ON CONFLICT(workspace_id, key) DO NOTHING`,
+    )
+    .run(wsId, key, requestHash, nowIso())
+  if (inserted.changes === 1) return { reserved: true, cached: null }
+  return { reserved: false, cached: idempotencyLookup(wsId, key, requestHash) }
+}
+
+export function idempotencyStore(wsId, key, requestHash, message, reserved) {
   if (!key) return
+  if (reserved) {
+    getDb()
+      .prepare(
+        `UPDATE idempotency_keys SET message_id = ?, response_json = ?
+         WHERE workspace_id = ? AND key = ?`,
+      )
+      .run(message.id, JSON.stringify(message), wsId, key)
+    return
+  }
   getDb()
     .prepare(
       `INSERT INTO idempotency_keys (workspace_id, key, request_hash, message_id, response_json, created_at)
@@ -184,7 +216,15 @@ function idempotencyStore(wsId, key, requestHash, message) {
     .run(wsId, key, requestHash, message.id, JSON.stringify(message), nowIso())
 }
 
+export function cleanupIdempotencyKeys() {
+  return getDb()
+    .prepare('DELETE FROM idempotency_keys WHERE created_at < ?')
+    .run(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+}
+
 publicApiRouter.post('/send', async (req, res, next) => {
+  let idempotencyReservation = null
+  let messageCreated = false
   try {
     const body = req.body || {}
     const wsId = workspaceId(req)
@@ -193,10 +233,10 @@ publicApiRouter.post('/send', async (req, res, next) => {
     const idempotencyKey = String(req.get('idempotency-key') || body.idempotency_key || '').slice(0, 200)
     const requestHash = JSON.stringify(body)
     if (idempotencyKey) {
-      const existing = idempotencyCheck(wsId, idempotencyKey, requestHash)
-      if (existing) return res.status(200).json(existing)
+      idempotencyReservation = idempotencyReserve(wsId, idempotencyKey, requestHash)
+      if (idempotencyReservation.cached) return res.status(200).json(idempotencyReservation.cached)
     }
-    const recipients = parseAddressList(body.to)
+    let recipients = parseAddressList(body.to)
     if (!recipients.length) throw fail(400, 'recipient_required', 'At least one valid recipient is required.')
     if (recipients.length > 20) throw fail(400, 'too_many_recipients', 'A message can have at most 20 recipients.')
     const verificationId = String(body.verification_id || '').trim()
@@ -214,19 +254,14 @@ publicApiRouter.post('/send', async (req, res, next) => {
       })
     }
     ensureRecipientsAllowed(req, recipients, { verificationEmail: verificationProof?.email })
-    const cc = parseAddressList(body.cc)
-    const bcc = parseAddressList(body.bcc)
-    const suppressed = getDb()
-      .prepare(
-        `SELECT email FROM suppressions WHERE workspace_id = ? AND email IN (${recipients.map(() => '?').join(',')})`,
-      )
-      .all(wsId, ...recipients.map((item) => item.email))
-    if (suppressed.length) {
-      const emails = suppressed.map((item) => item.email)
-      if (emails.length === recipients.length) {
-        throw fail(422, 'suppressed_recipient', 'All recipients are suppressed.')
-      }
-    }
+    const filtered = filterSuppressed(wsId, {
+      to: recipients,
+      cc: parseAddressList(body.cc),
+      bcc: parseAddressList(body.bcc),
+    })
+    recipients = filtered.to
+    const cc = filtered.cc
+    const bcc = filtered.bcc
 
     let thread = null
     const externalUserId = body.external_user_id ?? body.end_user_id ?? null
@@ -260,7 +295,7 @@ publicApiRouter.post('/send', async (req, res, next) => {
     }
 
     const content = await prepareContent(req, body)
-    const sender = body.from || null
+    const sender = req.apiKey.kind === 'public' ? req.apiKey.sender_identity_email || null : body.from || null
     let identity
     try {
       identity = resolveSendingIdentity(wsId, sender)
@@ -306,15 +341,21 @@ publicApiRouter.post('/send', async (req, res, next) => {
       attachments,
       verificationId: verificationProof?.id || null,
     })
+    messageCreated = true
     const response = {
       id: message.id,
       thread_id: threadId,
       status: message.status,
       message_id: message.message_id,
     }
-    idempotencyStore(wsId, idempotencyKey, requestHash, response)
+    idempotencyStore(wsId, idempotencyKey, requestHash, response, idempotencyReservation?.reserved)
     res.status(202).json(response)
   } catch (error) {
+    if (idempotencyReservation?.reserved && !messageCreated) {
+      getDb()
+        .prepare('DELETE FROM idempotency_keys WHERE workspace_id = ? AND key = ? AND message_id IS NULL')
+        .run(req.workspaceId, String(req.get('idempotency-key') || req.body?.idempotency_key || '').slice(0, 200))
+    }
     next(error)
   }
 })

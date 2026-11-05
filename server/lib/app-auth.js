@@ -18,6 +18,12 @@ import { authSettings } from './workspace.js'
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const RESEND_WINDOW_MS = 15 * 60 * 1000
 const RESEND_LIMIT = 5
+let dummyPasswordHash = null
+
+function dummyPasswordCheck(password) {
+  if (!dummyPasswordHash) dummyPasswordHash = hashPassword(randomToken(24))
+  verifyPassword(String(password || ''), dummyPasswordHash)
+}
 
 function requireEmail(value) {
   const email = normaliseEmail(value)
@@ -205,7 +211,11 @@ export function signInWithPassword({ workspaceId, email, password, req }) {
     throw fail(403, 'password_disabled', 'Password sign-in is disabled for this workspace.')
   }
   const user = findAppUser(workspaceId, requireEmail(email))
-  if (!user || !user.password_hash || !verifyPassword(String(password || ''), user.password_hash)) {
+  if (!user || !user.password_hash) {
+    dummyPasswordCheck(password)
+    throw fail(401, 'invalid_credentials', 'The email or password is incorrect.')
+  }
+  if (!verifyPassword(String(password || ''), user.password_hash)) {
     throw fail(401, 'invalid_credentials', 'The email or password is incorrect.')
   }
   assertActive(user)
@@ -500,6 +510,20 @@ export function verifyAuthToken({ workspaceId, token, email, purpose, req }) {
     redirectTo: row.redirect_to || config.appUrl,
     type: row.purpose,
   }
+}
+
+export function lookupAuthToken(raw) {
+  const db = getDb()
+  const token = String(raw || '').trim()
+  if (!token) throw fail(400, 'token_required', 'A token is required.')
+  const row = db.prepare('SELECT * FROM auth_tokens WHERE token_hash = ?').get(hashToken(token))
+  if (!row) throw fail(400, 'invalid_token', 'This link is invalid.')
+  if (row.used_at) throw fail(400, 'token_used', 'This link has already been used.')
+  if (new Date(row.expires_at).getTime() <= Date.now()) throw fail(400, 'token_expired', 'This link has expired.')
+  if (row.purpose !== 'magiclink' && row.purpose !== 'recovery') {
+    throw fail(400, 'invalid_token', 'This link is invalid.')
+  }
+  return { email: row.email, purpose: row.purpose, expiresAt: row.expires_at }
 }
 
 export function consumeAuthTokenByRaw({ token, req }) {

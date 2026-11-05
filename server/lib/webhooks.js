@@ -1,4 +1,6 @@
 import { lookup } from 'node:dns/promises'
+import http from 'node:http'
+import https from 'node:https'
 import { isIP } from 'node:net'
 import { config } from '../config.js'
 import { getDb, nowIso, parseJson } from '../db/index.js'
@@ -66,13 +68,21 @@ export function isPrivateAddress(address) {
     if (/^fe[89ab]/.test(value)) return true
     const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
     if (mapped) return isPrivateAddress(mapped[1])
+    const mappedHex = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+    if (mappedHex) {
+      const high = parseInt(mappedHex[1], 16)
+      const low = parseInt(mappedHex[2], 16)
+      return isPrivateAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`)
+    }
+    const nat64 = value.match(/^64:ff9b::(?:[0-9a-f]{1,4}:){0,2}?(\d+\.\d+\.\d+\.\d+)$/)
+    if (nat64) return isPrivateAddress(nat64[1])
     return false
   }
   return true
 }
 
-async function assertPublicWebhookDestination(parsed) {
-  if (config.webhooks.allowPrivate) return
+async function resolvePublicWebhookDestination(parsed) {
+  if (config.webhooks.allowPrivate) return null
   if (isPrivateHostname(parsed.hostname) || isPrivateAddress(parsed.hostname)) {
     throw new Error('Private webhook destinations are disabled.')
   }
@@ -81,6 +91,43 @@ async function assertPublicWebhookDestination(parsed) {
   if (addresses.some((entry) => isPrivateAddress(entry.address))) {
     throw new Error('Private webhook destinations are disabled.')
   }
+  return addresses[0]
+}
+
+function sendWebhookRequest(parsed, body, headers, pinned) {
+  return new Promise((resolve, reject) => {
+    const transport = parsed.protocol === 'https:' ? https : http
+    const request = transport.request(
+      parsed,
+      {
+        method: 'POST',
+        headers,
+        timeout: config.webhooks.timeoutMs,
+        agent: false,
+        ...(pinned
+          ? {
+              lookup: (_hostname, _options, callback) => callback(null, pinned.address, pinned.family),
+            }
+          : {}),
+      },
+      (response) => {
+        let text = ''
+        response.on('data', (chunk) => {
+          if (text.length < 500) text += chunk.toString('utf8')
+        })
+        response.on('end', () => {
+          resolve({
+            status: response.statusCode || 0,
+            ok: (response.statusCode || 0) >= 200 && (response.statusCode || 0) < 300,
+            text: text.slice(0, 500),
+          })
+        })
+      },
+    )
+    request.on('timeout', () => request.destroy(new Error('Webhook request timed out.')))
+    request.on('error', reject)
+    request.end(body)
+  })
 }
 
 export async function deliverWebhook(deliveryId) {
@@ -109,8 +156,9 @@ export async function deliverWebhook(deliveryId) {
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error('Webhook URL must use HTTP or HTTPS.')
   }
+  let pinned = null
   try {
-    await assertPublicWebhookDestination(parsed)
+    pinned = await resolvePublicWebhookDestination(parsed)
   } catch (error) {
     db.prepare("UPDATE webhook_deliveries SET status = 'failed', last_error = ? WHERE id = ?").run(
       error.message,
@@ -120,33 +168,25 @@ export async function deliverWebhook(deliveryId) {
   }
   const secret = decryptSecret(hook.secret_enc)
   const signature = signPayload(delivery.payload_json, secret)
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), config.webhooks.timeoutMs)
-  let response
-  try {
-    response = await fetch(hook.url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'user-agent': 'Postique-Webhooks/1.0',
-        'x-postique-event': delivery.event,
-        'x-postique-delivery': delivery.id,
-        'x-postique-signature': `sha256=${signature}`,
-      },
-      body: delivery.payload_json,
-      redirect: 'manual',
-      signal: controller.signal,
-    })
-  } finally {
-    clearTimeout(timer)
-  }
+  const response = await sendWebhookRequest(
+    parsed,
+    delivery.payload_json,
+    {
+      'content-type': 'application/json',
+      'user-agent': 'Postique-Webhooks/1.0',
+      'x-postique-event': delivery.event,
+      'x-postique-delivery': delivery.id,
+      'x-postique-signature': `sha256=${signature}`,
+    },
+    pinned,
+  )
   if (response.status >= 300 && response.status < 400) {
     db.prepare(
       "UPDATE webhook_deliveries SET status = 'failed', attempts = attempts + 1, response_code = ?, last_error = ? WHERE id = ?",
     ).run(response.status, 'Webhook redirects are not allowed.', delivery.id)
     throw new Error('Webhook redirects are not allowed.')
   }
-  const responseText = (await response.text().catch(() => '')).slice(0, 500)
+  const responseText = response.text
   const attempts = delivery.attempts + 1
   if (response.ok) {
     db.prepare(

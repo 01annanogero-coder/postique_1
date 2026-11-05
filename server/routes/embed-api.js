@@ -5,13 +5,14 @@ import { config } from '../config.js'
 import { getDb, nowIso } from '../db/index.js'
 import { apiCors, authenticateApiKey } from '../lib/api-auth.js'
 import { issueEmbedToken, verifyEmbedToken } from '../lib/embed-tokens.js'
-import { createOutboundMessage } from '../lib/messages.js'
-import { resolveSendingIdentity } from '../lib/mailer.js'
+import { makeId, makeMessageId } from '../lib/crypto.js'
 import { escapeHtml } from '../lib/format.js'
-import { replySubject } from '../lib/crypto.js'
+import { notifyOwner } from '../lib/notify.js'
+import { enqueueWebhookEvent } from '../lib/webhooks.js'
 import { fail } from '../lib/http.js'
 
 export const embedApiRouter = express.Router()
+const eventConnections = new Map()
 
 function bearer(req) {
   const header = req.get('authorization') || ''
@@ -160,6 +161,10 @@ embedApiRouter.get('/session', (req, res) => {
 })
 
 embedApiRouter.get('/events', (req, res) => {
+  const connectionKey = `${req.embed.workspace_id}:${req.embed.sub}`
+  const active = eventConnections.get(connectionKey) || 0
+  if (active >= 5) return res.status(429).json({ error: { code: 'too_many_streams', message: 'Too many open inbox streams.' } })
+  eventConnections.set(connectionKey, active + 1)
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache, no-transform',
@@ -206,6 +211,9 @@ embedApiRouter.get('/events', (req, res) => {
   const close = () => {
     clearInterval(check)
     clearInterval(heartbeat)
+    const remaining = Math.max(0, (eventConnections.get(connectionKey) || 1) - 1)
+    if (remaining) eventConnections.set(connectionKey, remaining)
+    else eventConnections.delete(connectionKey)
   }
   req.on('close', close)
   res.on('close', close)
@@ -252,23 +260,63 @@ embedApiRouter.post('/threads/:id/messages', (req, res, next) => {
     const text = String(req.body?.text || req.body?.body || '').trim()
     if (!text) return next(fail(400, 'empty_message', 'Write a message before sending.'))
     if (text.length > 10000) return next(fail(400, 'message_too_long', 'Keep replies under 10,000 characters.'))
-    const identity = resolveSendingIdentity(req.embed.workspace_id, null)
-    const message = createOutboundMessage({
-      workspaceId: req.embed.workspace_id,
-      threadId: thread.id,
-      from: { name: identity.from.name, email: identity.from.email },
-      to: [{ name: thread.customer_name, email: thread.customer_email }],
-      subject: replySubject(thread.subject),
-      html: textHtml(text),
+    const db = getDb()
+    const support = db
+      .prepare(
+        `SELECT from_email, from_name FROM messages
+         WHERE thread_id = ? AND direction = 'out' AND from_email != ''
+         ORDER BY date DESC, created_at DESC LIMIT 1`,
+      )
+      .get(thread.id)
+    const id = makeId('msg')
+    const createdAt = nowIso()
+    const subject = `Re: ${String(thread.subject || '').replace(/^(\s*re\s*:\s*)+/i, '').trim()}`
+    db.prepare(
+      `INSERT INTO messages
+        (id, workspace_id, thread_id, direction, author_type, message_id, in_reply_to, references_json,
+         from_email, from_name, to_json, cc_json, bcc_json, subject, html, text, status,
+         headers_json, is_test, created_at, received_at)
+       VALUES (?, ?, ?, 'in', 'human', ?, NULL, '[]', ?, ?, ?, '[]', '[]', ?, ?, ?, 'received', '{}', 0, ?, ?)`,
+    ).run(
+      id,
+      req.embed.workspace_id,
+      thread.id,
+      makeMessageId(config.inbound.domain),
+      thread.customer_email,
+      thread.customer_name,
+      JSON.stringify(
+        support ? [{ name: support.from_name, email: support.from_email }] : [],
+      ),
+      subject,
+      textHtml(text),
       text,
-      authorType: 'human',
+      createdAt,
+      createdAt,
+    )
+    db.prepare(
+      `UPDATE threads SET last_activity_at = ?, snippet = ?, unread = 1, status = 'open' WHERE id = ?`,
+    ).run(createdAt, text.replace(/\s+/g, ' ').slice(0, 180), thread.id)
+    db.prepare('INSERT INTO message_events (id, message_id, type, payload_json, at) VALUES (?, ?, ?, ?, ?)').run(
+      makeId('evt', 6),
+      id,
+      'received',
+      JSON.stringify({ detail: 'Customer replied from the embedded inbox' }),
+      createdAt,
+    )
+    enqueueWebhookEvent(req.embed.workspace_id, 'thread.reply_received', {
+      thread: { id: thread.id, subject, customer: { name: thread.customer_name, email: thread.customer_email } },
+      message: { id, direction: 'in', text: text.slice(0, 500) },
+    })
+    notifyOwner(req.embed.workspace_id, {
+      subject: `New reply from ${thread.customer_name || thread.customer_email}`,
+      text: `${thread.customer_name || thread.customer_email} replied to “${thread.subject}”.\n\n${text.slice(0, 1500)}`,
+      preference: 'notifyReplies',
     })
     res.status(202).json({
-      id: message.id,
+      id,
       thread_id: thread.id,
-      status: message.status,
-      message_id: message.message_id,
-      created_at: message.created_at,
+      status: 'received',
+      created_at: createdAt,
     })
   } catch (error) {
     next(error)

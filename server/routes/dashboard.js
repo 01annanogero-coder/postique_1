@@ -747,6 +747,13 @@ dashboardRouter.post('/keys', (req, res, next) => {
     const name = String(req.body?.name || (kind === 'public' ? 'Browser integration' : 'API key')).slice(0, 120)
     const recipientPolicy = req.body?.recipientPolicy === 'verified' ? 'verified' : 'fixed'
     const verificationTemplate = String(req.body?.verificationTemplate || '').trim()
+    const senderIdentity = normaliseEmail(req.body?.senderIdentity || '')
+    if (kind === 'public' && senderIdentity) {
+      const identity = db()
+        .prepare('SELECT 1 FROM identities WHERE workspace_id = ? AND from_email = ? COLLATE NOCASE')
+        .get(workspaceId(req), senderIdentity)
+      if (!identity) return next(fail(400, 'invalid_sender_identity', 'Choose a verified sender identity.'))
+    }
     if (kind === 'public' && verificationTemplate) {
       const template = db()
         .prepare('SELECT * FROM templates WHERE workspace_id = ? AND (slug = ? OR id = ?)')
@@ -791,8 +798,8 @@ dashboardRouter.post('/keys', (req, res, next) => {
     db().prepare(
       `INSERT INTO api_keys
         (id, workspace_id, name, kind, prefix, hash, allowed_origins_json, allowed_templates_json,
-         allowed_recipients_json, rate_limit, recipient_policy, verification_template, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         allowed_recipients_json, rate_limit, recipient_policy, verification_template, sender_identity_email, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       workspaceId(req),
@@ -806,6 +813,7 @@ dashboardRouter.post('/keys', (req, res, next) => {
       Number(req.body?.rateLimit) || (kind === 'public' ? config.limits.publicSendPerMinute : 120),
       recipientPolicy,
       verificationTemplate,
+      senderIdentity,
       createdAt,
     )
     res.status(201).json({
