@@ -60,8 +60,16 @@ export function OrderInbox({ token, threadId }) {
   useEffect(() => {
     const widget = ref.current;
     const onReply = (event) => console.log("Reply sent", event.detail);
+    const onExpired = async () => {
+      const next = await fetch("/api/postique/inbox-token").then((response) => response.json());
+      widget?.setToken(next.token);
+    };
     widget?.addEventListener("postique:reply.sent", onReply);
-    return () => widget?.removeEventListener("postique:reply.sent", onReply);
+    widget?.addEventListener("postique:session.expired", onExpired);
+    return () => {
+      widget?.removeEventListener("postique:reply.sent", onReply);
+      widget?.removeEventListener("postique:session.expired", onExpired);
+    };
   }, []);
 
   return (

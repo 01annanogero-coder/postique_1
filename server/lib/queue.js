@@ -10,14 +10,14 @@ let active = 0
 let ticking = false
 let stopped = false
 
-export function enqueue(type, payload, { runAt = nowIso(), maxAttempts = 5 } = {}) {
+export function enqueue(type, payload, { runAt = nowIso(), maxAttempts = 5, workspaceId = null } = {}) {
   const db = getDb()
   const id = makeId('job')
   const now = nowIso()
   db.prepare(
-    `INSERT INTO jobs (id, type, payload_json, status, attempts, max_attempts, run_at, created_at, updated_at)
-     VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?)`,
-  ).run(id, type, JSON.stringify(payload), maxAttempts, runAt, now, now)
+    `INSERT INTO jobs (id, workspace_id, type, payload_json, status, attempts, max_attempts, run_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)`,
+  ).run(id, workspaceId, type, JSON.stringify(payload), maxAttempts, runAt, now, now)
   kick()
   return id
 }
@@ -41,9 +41,25 @@ function failMessage(messageId, error, permanent) {
         )
         .get(message.campaign_id).count
       if (remaining === 0) {
-        db.prepare(
-          "UPDATE campaigns SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ?",
-        ).run(nowIso(), nowIso(), message.campaign_id)
+        const completed = db
+          .prepare(
+            "UPDATE campaigns SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ? AND status = 'running'",
+          )
+          .run(nowIso(), nowIso(), message.campaign_id)
+        if (completed.changes) {
+          const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(message.campaign_id)
+          enqueueWebhookEvent(campaign.workspace_id, 'campaign.completed', {
+            campaign: {
+              id: campaign.id,
+              name: campaign.name,
+              status: campaign.status,
+              scheduledAt: campaign.scheduled_at || null,
+              startedAt: campaign.started_at || null,
+              completedAt: campaign.completed_at || null,
+              total: campaign.total || 0,
+            },
+          })
+        }
       }
     }
   }
@@ -64,6 +80,20 @@ function failMessage(messageId, error, permanent) {
 async function runJob(job) {
   const payload = JSON.parse(job.payload_json || '{}')
   if (job.type === 'send_message') {
+    const db = getDb()
+    const message = db
+      .prepare(
+        `SELECT m.id, m.status, m.campaign_id, c.status AS campaign_status
+         FROM messages m LEFT JOIN campaigns c ON c.id = m.campaign_id WHERE m.id = ?`,
+      )
+      .get(payload.messageId)
+    if (message?.campaign_id && message.campaign_status === 'cancelled' && ['queued', 'sending'].includes(message.status)) {
+      db.prepare("UPDATE messages SET status = 'cancelled', error = 'Campaign cancelled before delivery.' WHERE id = ?").run(message.id)
+      db.prepare(
+        "UPDATE campaign_recipients SET status = 'cancelled', updated_at = ? WHERE message_id = ? AND status IN ('pending','queued')",
+      ).run(nowIso(), message.id)
+      return
+    }
     try {
       await deliverMessage(payload.messageId)
     } catch (error) {
@@ -80,6 +110,11 @@ async function runJob(job) {
   if (job.type === 'campaign_batch') {
     const { processCampaignBatch } = await import('./campaigns.js')
     await processCampaignBatch(payload.campaignId)
+    return
+  }
+  if (job.type === 'campaign_start') {
+    const { startScheduledCampaign } = await import('./campaigns.js')
+    startScheduledCampaign(payload.campaignId)
     return
   }
   throw new Error(`Unknown job type: ${job.type}`)

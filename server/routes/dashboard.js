@@ -31,6 +31,7 @@ import {
   setAppUserDisabled,
 } from '../lib/app-auth.js'
 import { enqueueWebhookDelivery } from '../lib/webhooks.js'
+import { cancelQueueJob, queueOverview, retryQueueJob } from '../lib/queue-admin.js'
 import {
   addCampaignRecipients,
   campaignDetail,
@@ -39,6 +40,7 @@ import {
   listCampaigns,
   pauseCampaign,
   resumeCampaign,
+  scheduleCampaign,
   startCampaign,
 } from '../lib/campaigns.js'
 import { createVerificationRequest, listVerifications } from '../lib/verification.js'
@@ -619,6 +621,7 @@ dashboardRouter.post('/campaigns', (req, res, next) => {
       subject: req.body?.subject,
       options: req.body?.options,
       recipients: Array.isArray(req.body?.recipients) ? req.body.recipients : [],
+      scheduledAt: req.body?.scheduled_at,
     })
     res.status(201).json(result)
   } catch (error) {
@@ -655,6 +658,14 @@ dashboardRouter.post('/campaigns/:id/start', (req, res, next) => {
   }
 })
 
+dashboardRouter.post('/campaigns/:id/schedule', (req, res, next) => {
+  try {
+    res.json({ campaign: scheduleCampaign(workspaceId(req), req.params.id, req.body?.scheduled_at) })
+  } catch (error) {
+    next(error)
+  }
+})
+
 dashboardRouter.post('/campaigns/:id/pause', (req, res, next) => {
   try {
     res.json({ campaign: pauseCampaign(workspaceId(req), req.params.id) })
@@ -674,6 +685,31 @@ dashboardRouter.post('/campaigns/:id/resume', (req, res, next) => {
 dashboardRouter.post('/campaigns/:id/cancel', (req, res, next) => {
   try {
     res.json({ campaign: cancelCampaign(workspaceId(req), req.params.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+/* Queue operations */
+dashboardRouter.get('/queue', (req, res, next) => {
+  try {
+    res.json(queueOverview(workspaceId(req), req.query.limit))
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.post('/queue/jobs/:id/retry', (req, res, next) => {
+  try {
+    res.json(retryQueueJob(workspaceId(req), req.params.id))
+  } catch (error) {
+    next(error)
+  }
+})
+
+dashboardRouter.post('/queue/jobs/:id/cancel', (req, res, next) => {
+  try {
+    res.json(cancelQueueJob(workspaceId(req), req.params.id))
   } catch (error) {
     next(error)
   }

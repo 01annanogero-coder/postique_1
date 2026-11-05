@@ -406,7 +406,9 @@
           this.state.threads = list.threads || []
         }
         this.render()
-      } catch (_) {}
+      } catch (error) {
+        if (error && error.status === 401) this.fail(error)
+      }
     }
 
     fail(error) {
@@ -414,6 +416,9 @@
       this.state.loading = false
       this.state.threadLoading = false
       this.state.error = error
+      if (error && error.status === 401) {
+        this.emit('session.expired', { message: error.message, status: 401 })
+      }
       this.emit('error', { message: error.message, status: error.status })
       this.render()
     }
@@ -471,6 +476,13 @@
 
     refresh() {
       return this.start()
+    }
+
+    setToken(token) {
+      if (!token) return this.fail(new Error('A short-lived inbox token is required.'))
+      if (this.token === token) return this.start()
+      this.setAttribute('token', token)
+      return Promise.resolve()
     }
   }
 

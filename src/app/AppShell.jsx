@@ -15,6 +15,7 @@ import {
   Inbox,
   Layers,
   LayoutDashboard,
+  ListTodo,
   LogOut,
   MailCheck,
   Megaphone,
@@ -34,6 +35,7 @@ import InboxPage from './InboxPage'
 import Campaigns from './Campaigns'
 import Domains from './Domains'
 import Logs from './Logs'
+import Queue from './Queue'
 import Automations from './Automations'
 import Assets from './Assets'
 import Developers from './Developers'
@@ -54,6 +56,7 @@ const primaryNav = [
 const infraNav = [
   { label: 'Domains', path: '/app/domains', icon: Globe2 },
   { label: 'Logs & events', path: '/app/logs', icon: Activity },
+  { label: 'Queue', path: '/app/queue', icon: ListTodo },
   { label: 'Automations', path: '/app/automations', icon: Sparkles },
   { label: 'Assets', path: '/app/assets', icon: Image },
 ]
@@ -72,6 +75,7 @@ const pageTitles = {
   '/app/studio': 'Template studio',
   '/app/domains': 'Domains',
   '/app/logs': 'Logs & events',
+  '/app/queue': 'Queue',
   '/app/automations': 'Automations',
   '/app/assets': 'Assets',
   '/app/verification': 'Verification',
@@ -275,6 +279,7 @@ function CommandPalette({ open, onClose }) {
       { type: 'page', label: 'Template studio', path: '/app/studio', icon: Layers },
       { type: 'page', label: 'Domains', path: '/app/domains', icon: Globe2 },
       { type: 'page', label: 'Logs & events', path: '/app/logs', icon: Activity },
+      { type: 'page', label: 'Queue', path: '/app/queue', icon: ListTodo },
       { type: 'page', label: 'Automations', path: '/app/automations', icon: Sparkles },
       { type: 'page', label: 'Assets', path: '/app/assets', icon: Image },
       { type: 'page', label: 'Verification', path: '/app/verification', icon: MailCheck },
@@ -433,6 +438,7 @@ function Page({ path }) {
   if (path.startsWith('/app/studio')) return <Studio />
   if (path.startsWith('/app/domains')) return <Domains />
   if (path.startsWith('/app/logs')) return <Logs />
+  if (path.startsWith('/app/queue')) return <Queue />
   if (path.startsWith('/app/automations')) return <Automations />
   if (path.startsWith('/app/assets')) return <Assets />
   if (path.startsWith('/app/verification')) return <Verification />

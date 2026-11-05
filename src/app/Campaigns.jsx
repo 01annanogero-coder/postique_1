@@ -1,20 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight,
+  CalendarClock,
   ChevronRight,
   Clock3,
   Megaphone,
   Pause,
   Play,
   Plus,
-  RefreshCw,
   Send,
   Users,
-  X,
 } from 'lucide-react'
 import { Badge, Button, Field, Modal, ProgressBar } from '../components/ui'
 import { api } from '../lib/api'
-import { cx, navigate } from '../lib/utils'
+import { navigate } from '../lib/utils'
 import { useStore } from '../store/StoreContext'
 import { PageHeader, SectionCard, EmptyState } from './shared'
 
@@ -38,29 +37,47 @@ function parseRecipients(value) {
 function statusTone(status) {
   if (status === 'completed') return 'success'
   if (status === 'running') return 'blue'
-  if (status === 'paused') return 'warning'
-  if (status === 'cancelled') return 'neutral'
+  if (status === 'paused' || status === 'scheduled') return 'warning'
+  if (status === 'cancelled') return 'danger'
   return 'neutral'
 }
 
-function CampaignRow({ campaign, onAction }) {
+function when(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? ''
+    : date.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+}
+
+function localInput(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+}
+
+function CampaignRow({ campaign, onOpen, onAction }) {
   const total = campaign.total || 0
-  const done = (campaign.sent || 0) + (campaign.failed || 0) + (campaign.suppressed || 0)
+  const done = (campaign.sent || 0) + (campaign.failed || 0) + (campaign.suppressed || 0) + (campaign.unsubscribed || 0) + (campaign.cancelled || 0)
   const percent = total ? Math.min(100, Math.round((done / total) * 100)) : 0
   return (
     <div className="campaign-row">
-      <div className="campaign-row__main">
+      <button type="button" className="campaign-row__main campaign-row__open" onClick={() => onOpen(campaign)}>
         <span className="campaign-row__icon"><Megaphone size={16} /></span>
-        <div>
-          <div className="campaign-row__title">
+        <span>
+          <span className="campaign-row__title">
             <strong>{campaign.name}</strong>
             <Badge tone={statusTone(campaign.status)} dot>{campaign.status}</Badge>
-          </div>
+          </span>
           <span className="campaign-row__meta">
+            {campaign.status === 'scheduled' && campaign.scheduledAt
+              ? `Scheduled ${when(campaign.scheduledAt)} · `
+              : ''}
             {total.toLocaleString()} recipients · {campaign.sent || 0} sent · {campaign.failed || 0} failed
           </span>
-        </div>
-      </div>
+        </span>
+      </button>
       <div className="campaign-row__progress">
         <div>
           <span>{percent}%</span>
@@ -74,16 +91,159 @@ function CampaignRow({ campaign, onAction }) {
             Pause
           </Button>
         )}
-        {(campaign.status === 'paused' || campaign.status === 'draft') && (
+        {(campaign.status === 'paused' || campaign.status === 'draft' || campaign.status === 'scheduled') && (
           <Button size="sm" onClick={() => onAction('start', campaign)} icon={<Play size={13} />}>
-            {campaign.status === 'paused' ? 'Resume' : 'Start'}
+            {campaign.status === 'paused' ? 'Resume' : 'Start now'}
           </Button>
         )}
-        <button className="icon-button" onClick={() => navigate('/app/campaigns')} aria-label="Refresh">
-          <RefreshCw size={13} />
+        <button className="icon-button" onClick={() => onOpen(campaign)} aria-label="Open campaign">
+          <ChevronRight size={14} />
         </button>
       </div>
     </div>
+  )
+}
+
+function CampaignDetail({
+  detail,
+  loading,
+  schedule,
+  setSchedule,
+  audience,
+  setAudience,
+  onClose,
+  onAction,
+  onAdd,
+  onSchedule,
+  busy,
+}) {
+  const campaign = detail?.campaign
+  const recipients = detail?.recipients || []
+  const canAdd = campaign && ['draft', 'scheduled', 'running', 'paused'].includes(campaign.status)
+  const canSchedule = campaign && campaign.status === 'draft'
+  const canCancel = campaign && !['completed', 'cancelled'].includes(campaign.status)
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={campaign?.name || 'Campaign'}
+      eyebrow="Campaign detail"
+      description={campaign ? `Created ${when(campaign.createdAt)} · ${campaign.batchSize} recipients per batch` : 'Loading…'}
+      footer={
+        <>
+          {canCancel && (
+            <Button variant="danger" onClick={() => onAction('cancel', campaign)}>
+              Cancel campaign
+            </Button>
+          )}
+          <Button variant="secondary" onClick={onClose}>Close</Button>
+        </>
+      }
+    >
+      {loading || !campaign ? (
+        <div className="campaign-loading"><span className="button__spinner" /> Loading campaign…</div>
+      ) : (
+        <div className="campaign-detail">
+          <div className="campaign-detail__status">
+            <Badge tone={statusTone(campaign.status)} dot>{campaign.status}</Badge>
+            {campaign.status === 'scheduled' && campaign.scheduledAt && (
+              <span><CalendarClock size={12} /> Starts {when(campaign.scheduledAt)}</span>
+            )}
+            {campaign.startedAt && <span><Clock3 size={12} /> Started {when(campaign.startedAt)}</span>}
+          </div>
+
+          <div className="campaign-detail__stats">
+            <div><span>Total</span><strong>{campaign.total}</strong></div>
+            <div><span>Sent</span><strong>{campaign.sent}</strong></div>
+            <div><span>Waiting</span><strong>{campaign.pending + campaign.queued}</strong></div>
+            <div><span>Failed</span><strong>{campaign.failed}</strong></div>
+            <div><span>Cancelled</span><strong>{campaign.cancelled}</strong></div>
+            <div><span>Unsubscribed</span><strong>{campaign.unsubscribed}</strong></div>
+          </div>
+
+          {campaign.status === 'running' && (
+            <div className="campaign-detail__actions">
+              <Button variant="secondary" size="sm" onClick={() => onAction('pause', campaign)} icon={<Pause size={13} />}>
+                Pause after current work
+              </Button>
+            </div>
+          )}
+          {campaign.status === 'paused' && (
+            <div className="campaign-detail__actions">
+              <Button size="sm" onClick={() => onAction('start', campaign)} icon={<Play size={13} />}>Resume</Button>
+            </div>
+          )}
+
+          {canSchedule && (
+            <div className="campaign-detail__schedule">
+              <Field label="Schedule for later" hint="The worker starts the campaign at this time. Times are shown in your local timezone.">
+                <input
+                  className="input"
+                  type="datetime-local"
+                  value={schedule || localInput(campaign.scheduledAt)}
+                  min={localInput(new Date(Date.now() + 60_000).toISOString())}
+                  onChange={(event) => setSchedule(event.target.value)}
+                />
+              </Field>
+              <Button variant="secondary" onClick={onSchedule} disabled={!schedule && !campaign.scheduledAt} icon={<CalendarClock size={14} />}>
+                Schedule
+              </Button>
+            </div>
+          )}
+
+          <div className="campaign-detail__recipients">
+            <div className="campaign-detail__section-head">
+              <div>
+                <strong>Recipients</strong>
+                <span>{recipients.length.toLocaleString()} shown</span>
+              </div>
+            </div>
+            {recipients.length === 0 ? (
+              <p className="campaign-detail__empty">No recipients in this campaign.</p>
+            ) : (
+              <div className="campaign-recipient-table">
+                <div className="campaign-recipient-table__head">
+                  <span>Recipient</span><span>Status</span><span>Detail</span>
+                </div>
+                {recipients.slice(0, 100).map((recipient) => (
+                  <div className="campaign-recipient-row" key={recipient.id}>
+                    <div>
+                      <strong>{recipient.email}</strong>
+                      <small>{recipient.name || recipient.externalUserId || '—'}</small>
+                    </div>
+                    <Badge tone={recipient.status === 'sent' ? 'success' : recipient.status === 'failed' ? 'danger' : recipient.status === 'unsubscribed' ? 'warning' : 'neutral'}>
+                      {recipient.status}
+                    </Badge>
+                    <span>{recipient.error || '—'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {canAdd && (
+            <div className="campaign-detail__add">
+              <Field
+                label="Append a recipient batch"
+                hint={`${parseRecipients(audience).length} parsed · max 5,000 per request · duplicates are ignored.`}
+              >
+                <textarea
+                  className="input campaign-audience campaign-audience--small"
+                  value={audience}
+                  onChange={(event) => setAudience(event.target.value)}
+                  rows={4}
+                  placeholder={'another@example.com,Name\nthird@example.com,Name,user_789'}
+                />
+              </Field>
+              <Button variant="secondary" onClick={onAdd} disabled={!parseRecipients(audience).length || busy} icon={<Plus size={14} />}>
+                Add recipients
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
   )
 }
 
@@ -99,6 +259,12 @@ export default function Campaigns() {
   const [subject, setSubject] = useState('')
   const [audience, setAudience] = useState('')
   const [startNow, setStartNow] = useState(true)
+  const [scheduledAt, setScheduledAt] = useState('')
+  const [detailId, setDetailId] = useState(null)
+  const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailAudience, setDetailAudience] = useState('')
+  const [detailSchedule, setDetailSchedule] = useState('')
 
   const identities = useMemo(
     () => domains.flatMap((domain) => (domain.identityRecords || []).map((identity) => ({ ...identity, domain: domain.name }))),
@@ -117,6 +283,18 @@ export default function Campaigns() {
     }
   }
 
+  const loadDetail = async (id) => {
+    if (!id) return
+    setDetailLoading(true)
+    try {
+      setDetail(await api.campaign(id))
+    } catch (error) {
+      toast('Campaign could not be loaded', 'error', error.message)
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
   useEffect(() => {
     load()
     const timer = setInterval(() => {
@@ -126,15 +304,27 @@ export default function Campaigns() {
   }, [])
 
   useEffect(() => {
+    if (detailId) loadDetail(detailId)
+  }, [detailId])
+
+  useEffect(() => {
     if (!template && publishedTemplates[0]) setTemplate(publishedTemplates[0].slug)
     if (!fromEmail && identities[0]) setFromEmail(identities[0].from_email)
   }, [template, fromEmail, publishedTemplates, identities])
+
+  const openDetail = (campaign) => {
+    setDetailId(campaign.id)
+    setDetail(null)
+    setDetailAudience('')
+    setDetailSchedule(localInput(campaign.scheduledAt))
+  }
 
   const create = async () => {
     const recipients = parseRecipients(audience)
     if (!name.trim()) return toast('Give the campaign a name', 'error')
     if (!template) return toast('Choose a published template', 'error')
     if (!recipients.length) return toast('Add at least one recipient', 'error')
+    if (scheduledAt && new Date(scheduledAt).getTime() <= Date.now()) return toast('Choose a future schedule', 'error')
     setBusy(true)
     try {
       const result = await api.createCampaign({
@@ -143,14 +333,21 @@ export default function Campaigns() {
         from_email: fromEmail || undefined,
         subject: subject.trim() || undefined,
         recipients,
+        scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
       })
-      if (startNow) await api.startCampaign(result.campaign.id)
-      toast('Campaign created', 'success', `${recipients.length} recipients queued`)
+      if (startNow && !scheduledAt) await api.startCampaign(result.campaign.id)
+      toast(
+        scheduledAt ? 'Campaign scheduled' : 'Campaign created',
+        'success',
+        scheduledAt ? `Starts ${when(scheduledAt)}` : `${recipients.length} recipients queued`,
+      )
       setCreateOpen(false)
       setName('')
       setAudience('')
       setSubject('')
+      setScheduledAt('')
       await load()
+      openDetail(result.campaign)
     } catch (error) {
       toast('Campaign could not be created', 'error', error.message)
     } finally {
@@ -170,8 +367,47 @@ export default function Campaigns() {
         setCampaigns((current) => current.map((item) => (item.id === campaign.id ? result.campaign : item)))
         toast('Campaign paused', 'success', 'Queued messages already handed to the delivery worker may still send.')
       }
+      if (type === 'cancel') {
+        const result = await api.cancelCampaign(campaign.id)
+        setCampaigns((current) => current.map((item) => (item.id === campaign.id ? result.campaign : item)))
+        toast('Campaign cancelled', 'success', 'Queued messages will be skipped by the worker.')
+      }
+      if (detailId === campaign.id) await loadDetail(campaign.id)
+      await load()
     } catch (error) {
       toast('Campaign action failed', 'error', error.message)
+    }
+  }
+
+  const addRecipients = async () => {
+    const recipients = parseRecipients(detailAudience)
+    if (!detailId || !recipients.length) return
+    setBusy(true)
+    try {
+      const result = await api.addCampaignRecipients(detailId, recipients)
+      toast('Recipients added', 'success', `${result.added} added · ${result.total} total`)
+      setDetailAudience('')
+      await loadDetail(detailId)
+      await load()
+    } catch (error) {
+      toast('Recipients could not be added', 'error', error.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const schedule = async () => {
+    if (!detailId || !detailSchedule) return toast('Choose a schedule', 'error')
+    setBusy(true)
+    try {
+      await api.scheduleCampaign(detailId, new Date(detailSchedule).toISOString())
+      toast('Campaign scheduled', 'success', `Starts ${when(detailSchedule)}`)
+      await loadDetail(detailId)
+      await load()
+    } catch (error) {
+      toast('Campaign could not be scheduled', 'error', error.message)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -218,7 +454,7 @@ export default function Campaigns() {
           ) : (
             <div className="campaign-list">
               {campaigns.map((campaign) => (
-                <CampaignRow key={campaign.id} campaign={campaign} onAction={action} />
+                <CampaignRow key={campaign.id} campaign={campaign} onOpen={openDetail} onAction={action} />
               ))}
             </div>
           )}
@@ -258,7 +494,9 @@ export default function Campaigns() {
         footer={
           <>
             <Button variant="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button onClick={create} loading={busy} icon={!busy && <Send size={14} />}>Create campaign</Button>
+            <Button onClick={create} loading={busy} icon={!busy && <Send size={14} />}>
+              {scheduledAt ? 'Schedule campaign' : 'Create campaign'}
+            </Button>
           </>
         }
       >
@@ -287,6 +525,18 @@ export default function Campaigns() {
               <input className="input" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Template subject" />
             </Field>
           </div>
+          <Field label="Schedule for later" hint="Leave blank to keep as a draft or start immediately. Times are local.">
+            <input
+              className="input"
+              type="datetime-local"
+              value={scheduledAt}
+              min={localInput(new Date(Date.now() + 60_000).toISOString())}
+              onChange={(event) => {
+                setScheduledAt(event.target.value)
+                if (event.target.value) setStartNow(false)
+              }}
+            />
+          </Field>
           <Field label="Recipients" hint={`${parseRecipients(audience).length} parsed recipients · maximum 5,000 per request.`}>
             <textarea
               className="input campaign-audience"
@@ -297,11 +547,35 @@ export default function Campaigns() {
             />
           </Field>
           <label className="campaign-start-check">
-            <input type="checkbox" checked={startNow} onChange={(event) => setStartNow(event.target.checked)} />
+            <input
+              type="checkbox"
+              checked={startNow && !scheduledAt}
+              disabled={Boolean(scheduledAt)}
+              onChange={(event) => setStartNow(event.target.checked)}
+            />
             <span>Start immediately after creating the draft</span>
           </label>
         </div>
       </Modal>
+
+      {detailId && (
+        <CampaignDetail
+          detail={detail}
+          loading={detailLoading}
+          schedule={detailSchedule}
+          setSchedule={setDetailSchedule}
+          audience={detailAudience}
+          setAudience={setDetailAudience}
+          onClose={() => {
+            setDetailId(null)
+            setDetail(null)
+          }}
+          onAction={action}
+          onAdd={addRecipients}
+          onSchedule={schedule}
+          busy={busy}
+        />
+      )}
     </div>
   )
 }

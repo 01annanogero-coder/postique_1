@@ -7,9 +7,26 @@ import { createOutboundMessage } from './messages.js'
 import { compileMjml, htmlToText, renderSubject } from './templates.js'
 import { enqueue } from './queue.js'
 import { unsubscribeUrl } from './unsubscribe.js'
+import { enqueueWebhookEvent } from './webhooks.js'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const ACTIVE = ['draft', 'running', 'paused']
+const ACTIVE = ['draft', 'running', 'paused', 'scheduled']
+
+function campaignEvent(campaign, extra = {}) {
+  enqueueWebhookEvent(campaign.workspace_id, `campaign.${extra.event || 'updated'}`, {
+    campaign: {
+      id: campaign.id,
+      name: campaign.name,
+      status: campaign.status,
+      scheduledAt: campaign.scheduled_at || null,
+      startedAt: campaign.started_at || null,
+      completedAt: campaign.completed_at || null,
+      total: campaign.total || 0,
+    },
+    ...extra.data,
+  })
+}
+
 
 function normaliseRecipient(recipient, index) {
   const email = normaliseEmail(recipient?.email)
@@ -47,12 +64,13 @@ export function campaignView(campaign) {
     .all(campaign.id)
   const byStatus = Object.fromEntries(counts.map((row) => [row.status, row.count]))
   if (campaign.status === 'running' && !(byStatus.pending || byStatus.queued)) {
-    db.prepare("UPDATE campaigns SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ?").run(
-      nowIso(),
-      nowIso(),
-      campaign.id,
-    )
+    const completed = db
+      .prepare(
+        "UPDATE campaigns SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ? AND status = 'running'",
+      )
+      .run(nowIso(), nowIso(), campaign.id)
     campaign = { ...campaign, status: 'completed', completed_at: nowIso() }
+    if (completed.changes) campaignEvent(campaign, { event: 'completed' })
   }
   const total = Object.values(byStatus).reduce((sum, value) => sum + value, 0)
   return {
@@ -66,9 +84,11 @@ export function campaignView(campaign) {
     failed: byStatus.failed || 0,
     suppressed: byStatus.suppressed || 0,
     unsubscribed: byStatus.unsubscribed || 0,
+    cancelled: byStatus.cancelled || 0,
     createdAt: campaign.created_at,
     updatedAt: campaign.updated_at,
     startedAt: campaign.started_at,
+    scheduledAt: campaign.scheduled_at || null,
     completedAt: campaign.completed_at,
     templateId: campaign.template_id,
     fromEmail: campaign.from_email,
@@ -104,30 +124,61 @@ export function campaignDetail(workspaceId, id) {
       status: recipient.status,
       error: recipient.error,
       messageId: recipient.message_id,
+      attempts: recipient.attempts,
       createdAt: recipient.created_at,
+      expiresAt: recipient.expires_at,
     }))
   return { campaign: campaignView(campaign), recipients }
 }
 
-export function createCampaign({ workspaceId, name, template, fromEmail, fromName, subject, options = {}, recipients = [] }) {
+function normaliseSchedule(value) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) throw fail(400, 'invalid_schedule', 'Choose a valid campaign schedule.')
+  if (date.getTime() <= Date.now() + 30_000) {
+    throw fail(400, 'schedule_in_past', 'The campaign schedule must be at least 30 seconds in the future.')
+  }
+  return date.toISOString()
+}
+
+export function createCampaign({
+  workspaceId,
+  name,
+  template,
+  fromEmail,
+  fromName,
+  subject,
+  options = {},
+  recipients = [],
+  scheduledAt = null,
+}) {
   if (!String(name || '').trim()) throw fail(400, 'campaign_name_required', 'Enter a campaign name.')
   if (recipients.length > config.campaigns.maxRecipientsPerRequest) {
     throw fail(413, 'too_many_recipients', `A single request can contain at most ${config.campaigns.maxRecipientsPerRequest} recipients.`)
   }
+  recipients.map(normaliseRecipient)
+  const scheduled = normaliseSchedule(scheduledAt)
+  if (scheduled && !recipients.length) {
+    throw fail(400, 'campaign_empty', 'Add at least one recipient before scheduling a campaign.')
+  }
   const db = getDb()
   const campaignTemplate = template ? templateVersion(workspaceId, template) : null
+  if (scheduled && !campaignTemplate) {
+    throw fail(400, 'template_required', 'Choose a published template before scheduling a campaign.')
+  }
   const id = makeId('cmp')
   const createdAt = new Date()
   const retentionAt = new Date(createdAt.getTime() + config.campaigns.retentionDays * 24 * 60 * 60 * 1000)
   db.prepare(
     `INSERT INTO campaigns
       (id, workspace_id, name, status, template_id, template_version_id, from_email, from_name,
-       subject_override, total, batch_size, options_json, created_at, updated_at, retention_at)
-     VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+       subject_override, total, batch_size, options_json, scheduled_at, created_at, updated_at, retention_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     workspaceId,
     String(name).trim().slice(0, 160),
+    scheduled ? 'scheduled' : 'draft',
     campaignTemplate?.template.id || null,
     campaignTemplate?.version.id || null,
     String(fromEmail || '').slice(0, 320),
@@ -135,12 +186,17 @@ export function createCampaign({ workspaceId, name, template, fromEmail, fromNam
     String(subject || '').slice(0, 300),
     config.campaigns.batchSize,
     JSON.stringify(options && typeof options === 'object' ? options : {}),
+    scheduled,
     createdAt.toISOString(),
     createdAt.toISOString(),
     retentionAt.toISOString(),
   )
   const campaign = getCampaign(workspaceId, id)
   if (recipients.length) addCampaignRecipients({ workspaceId, campaignId: id, recipients })
+  if (scheduled) {
+    enqueue('campaign_start', { campaignId: id }, { runAt: scheduled, workspaceId })
+    campaignEvent(getCampaign(workspaceId, id), { event: 'scheduled' })
+  }
   return campaignDetail(workspaceId, id)
 }
 
@@ -195,8 +251,8 @@ export function addCampaignRecipients({ workspaceId, campaignId, recipients }) {
 
 export function startCampaign(workspaceId, id) {
   const campaign = getCampaign(workspaceId, id)
-  if (!['draft', 'paused'].includes(campaign.status)) {
-    throw fail(409, 'campaign_not_startable', 'Only draft or paused campaigns can be started.')
+  if (!['draft', 'paused', 'scheduled'].includes(campaign.status)) {
+    throw fail(409, 'campaign_not_startable', 'Only draft, scheduled or paused campaigns can be started.')
   }
   const total = getDb().prepare('SELECT COUNT(*) AS count FROM campaign_recipients WHERE campaign_id = ?').get(id).count
   if (!total) throw fail(400, 'campaign_empty', 'Add at least one recipient before starting.')
@@ -215,37 +271,77 @@ export function startCampaign(workspaceId, id) {
   getDb()
     .prepare("UPDATE campaigns SET status = 'running', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?")
     .run(nowIso(), nowIso(), id)
-  enqueue('campaign_batch', { campaignId: id })
-  return campaignView(getCampaign(workspaceId, id))
+  const updated = getCampaign(workspaceId, id)
+  campaignEvent(updated, { event: 'started' })
+  enqueue('campaign_batch', { campaignId: id }, { workspaceId })
+  return campaignView(updated)
+}
+
+export function scheduleCampaign(workspaceId, id, scheduledAt) {
+  const campaign = getCampaign(workspaceId, id)
+  if (campaign.status !== 'draft') {
+    throw fail(409, 'campaign_not_schedulable', 'Only draft campaigns can be scheduled. Cancel and recreate the campaign to change its schedule.')
+  }
+  const total = getDb().prepare('SELECT COUNT(*) AS count FROM campaign_recipients WHERE campaign_id = ?').get(id).count
+  if (!total) throw fail(400, 'campaign_empty', 'Add at least one recipient before scheduling.')
+  if (!campaign.template_id && !campaign.template_version_id) {
+    throw fail(400, 'template_required', 'Choose a published template before scheduling.')
+  }
+  const scheduled = normaliseSchedule(scheduledAt)
+  if (!scheduled) throw fail(400, 'invalid_schedule', 'Choose a campaign schedule.')
+  getDb()
+    .prepare("UPDATE campaigns SET status = 'scheduled', scheduled_at = ?, updated_at = ? WHERE id = ?")
+    .run(scheduled, nowIso(), id)
+  enqueue('campaign_start', { campaignId: id }, { runAt: scheduled, workspaceId })
+  const updated = getCampaign(workspaceId, id)
+  campaignEvent(updated, { event: 'scheduled' })
+  return campaignView(updated)
+}
+
+export function startScheduledCampaign(campaignId) {
+  const campaign = getDb().prepare('SELECT * FROM campaigns WHERE id = ?').get(campaignId)
+  if (!campaign || campaign.status !== 'scheduled') return
+  startCampaign(campaign.workspace_id, campaign.id)
 }
 
 export function pauseCampaign(workspaceId, id) {
   const campaign = getCampaign(workspaceId, id)
   if (campaign.status !== 'running') throw fail(409, 'campaign_not_running', 'This campaign is not running.')
   getDb().prepare("UPDATE campaigns SET status = 'paused', updated_at = ? WHERE id = ?").run(nowIso(), id)
-  return campaignView(getCampaign(workspaceId, id))
+  const updated = getCampaign(workspaceId, id)
+  campaignEvent(updated, { event: 'paused' })
+  return campaignView(updated)
 }
 
 export function resumeCampaign(workspaceId, id) {
   const campaign = getCampaign(workspaceId, id)
   if (campaign.status !== 'paused') throw fail(409, 'campaign_not_paused', 'This campaign is not paused.')
   getDb().prepare("UPDATE campaigns SET status = 'running', updated_at = ? WHERE id = ?").run(nowIso(), id)
-  enqueue('campaign_batch', { campaignId: id })
-  return campaignView(getCampaign(workspaceId, id))
+  const updated = getCampaign(workspaceId, id)
+  campaignEvent(updated, { event: 'resumed' })
+  enqueue('campaign_batch', { campaignId: id }, { workspaceId })
+  return campaignView(updated)
 }
 
 export function cancelCampaign(workspaceId, id) {
   const campaign = getCampaign(workspaceId, id)
   if (['completed', 'cancelled'].includes(campaign.status)) return campaignView(campaign)
-  getDb()
-    .prepare("UPDATE campaign_recipients SET status = 'cancelled', updated_at = ? WHERE campaign_id = ? AND status IN ('pending','queued')")
-    .run(nowIso(), id)
-  getDb().prepare("UPDATE campaigns SET status = 'cancelled', completed_at = ?, updated_at = ? WHERE id = ?").run(
-    nowIso(),
-    nowIso(),
-    id,
-  )
-  return campaignView(getCampaign(workspaceId, id))
+  transaction((tx) => {
+    tx.prepare(
+      "UPDATE campaign_recipients SET status = 'cancelled', updated_at = ? WHERE campaign_id = ? AND status IN ('pending','queued')",
+    ).run(nowIso(), id)
+    tx.prepare(
+      "UPDATE messages SET status = 'cancelled', error = 'Campaign cancelled before delivery.' WHERE campaign_id = ? AND status IN ('queued','sending')",
+    ).run(id)
+    tx.prepare("UPDATE campaigns SET status = 'cancelled', completed_at = ?, updated_at = ? WHERE id = ?").run(
+      nowIso(),
+      nowIso(),
+      id,
+    )
+  })
+  const updated = getCampaign(workspaceId, id)
+  campaignEvent(updated, { event: 'cancelled' })
+  return campaignView(updated)
 }
 
 function resolveCampaignFrom(campaign) {
@@ -329,17 +425,18 @@ export async function processCampaignBatch(campaignId) {
     .prepare("SELECT COUNT(*) AS count FROM campaign_recipients WHERE campaign_id = ? AND status = 'pending'")
     .get(campaignId).count
   const running = db.prepare('SELECT status FROM campaigns WHERE id = ?').get(campaignId)?.status === 'running'
-  if (pending > 0 && running) enqueue('campaign_batch', { campaignId })
+  if (pending > 0 && running) enqueue('campaign_batch', { campaignId }, { workspaceId: campaign.workspace_id })
   else if (running && pending === 0) {
     const queued = db
       .prepare("SELECT COUNT(*) AS count FROM campaign_recipients WHERE campaign_id = ? AND status = 'queued'")
       .get(campaignId).count
     if (queued === 0) {
-      db.prepare("UPDATE campaigns SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?").run(
-        nowIso(),
-        nowIso(),
-        campaignId,
-      )
+      const completed = db
+        .prepare(
+          "UPDATE campaigns SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+        )
+        .run(nowIso(), nowIso(), campaignId)
+      if (completed.changes) campaignEvent({ ...campaign, status: 'completed', completed_at: nowIso() }, { event: 'completed' })
     }
   }
 }

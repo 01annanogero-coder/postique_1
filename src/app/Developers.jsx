@@ -86,6 +86,13 @@ const webhookEvents = [
   'message.complained',
   'message.failed',
   'thread.reply_received',
+  'verification.completed',
+  'campaign.scheduled',
+  'campaign.started',
+  'campaign.paused',
+  'campaign.resumed',
+  'campaign.completed',
+  'campaign.cancelled',
 ]
 
 function KeyRow({ apiKey, onRevoke }) {

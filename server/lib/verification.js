@@ -6,6 +6,7 @@ import { fail } from './http.js'
 import { compileMjml, htmlToText, renderSubject } from './templates.js'
 import { sendServiceEmail } from './service-mail.js'
 import { logger } from './logger.js'
+import { enqueueWebhookEvent } from './webhooks.js'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -170,17 +171,28 @@ export function confirmVerification(rawToken, req) {
   const row = db.prepare('SELECT * FROM verification_requests WHERE token_hash = ?').get(hashToken(token))
   if (!row) throw fail(400, 'invalid_token', 'This verification link is invalid.')
   if (row.status === 'failed') throw fail(400, 'invalid_token', 'This verification email could not be delivered.')
+  let firstConfirmation = false
   if (row.status !== 'verified') {
     if (new Date(row.expires_at).getTime() <= Date.now()) {
       throw fail(400, 'token_expired', 'This verification link has expired.')
     }
-    db.prepare("UPDATE verification_requests SET status = 'verified', verified_at = ?, ip = ? WHERE id = ?").run(
-      nowIso(),
-      req?.ip || row.ip,
-      row.id,
-    )
+    const result = db
+      .prepare("UPDATE verification_requests SET status = 'verified', verified_at = ?, ip = ? WHERE id = ? AND status != 'verified'")
+      .run(nowIso(), req?.ip || row.ip, row.id)
+    firstConfirmation = result.changes === 1
   }
   const updated = db.prepare('SELECT * FROM verification_requests WHERE id = ?').get(row.id)
+  if (firstConfirmation) {
+    enqueueWebhookEvent(updated.workspace_id, 'verification.completed', {
+      verification: {
+        id: updated.id,
+        email: updated.email,
+        name: updated.name,
+        metadata: parseJson(updated.metadata_json, {}),
+        verifiedAt: updated.verified_at,
+      },
+    })
+  }
   return {
     id: updated.id,
     email: updated.email,

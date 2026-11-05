@@ -19,6 +19,7 @@ import {
   listCampaigns,
   pauseCampaign,
   resumeCampaign,
+  scheduleCampaign,
   startCampaign,
 } from '../lib/campaigns.js'
 
@@ -423,6 +424,7 @@ publicApiRouter.post('/campaigns', (req, res, next) => {
       subject: req.body?.subject,
       options: req.body?.options,
       recipients: Array.isArray(req.body?.recipients) ? req.body.recipients : [],
+      scheduledAt: req.body?.scheduled_at,
     })
     res.status(201).json(result)
   } catch (error) {
@@ -458,6 +460,15 @@ publicApiRouter.post('/campaigns/:id/start', (req, res, next) => {
   try {
     requireSecret(req)
     res.status(202).json({ campaign: startCampaign(workspaceId(req), req.params.id) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+publicApiRouter.post('/campaigns/:id/schedule', (req, res, next) => {
+  try {
+    requireSecret(req)
+    res.json({ campaign: scheduleCampaign(workspaceId(req), req.params.id, req.body?.scheduled_at) })
   } catch (error) {
     next(error)
   }

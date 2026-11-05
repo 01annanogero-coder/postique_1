@@ -33,6 +33,7 @@ const statusMeta = {
   complained: { label: 'Complained', tone: 'danger' },
   queued: { label: 'Queued', tone: 'warning' },
   failed: { label: 'Failed', tone: 'danger' },
+  cancelled: { label: 'Cancelled', tone: 'neutral' },
 }
 
 const filterList = [

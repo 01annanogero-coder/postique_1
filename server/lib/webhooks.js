@@ -17,9 +17,9 @@ export function enqueueWebhookDelivery(hook, event, data) {
      VALUES (?, ?, ?, ?, 'pending', 0, ?)`,
   ).run(deliveryId, hook.id, event, payload, nowIso())
   db.prepare(
-    `INSERT INTO jobs (id, type, payload_json, status, attempts, max_attempts, run_at, created_at, updated_at)
-     VALUES (?, 'webhook_delivery', ?, 'pending', 0, 5, ?, ?, ?)`,
-  ).run(makeId('job'), JSON.stringify({ deliveryId }), nowIso(), nowIso(), nowIso())
+    `INSERT INTO jobs (id, workspace_id, type, payload_json, status, attempts, max_attempts, run_at, created_at, updated_at)
+     VALUES (?, ?, 'webhook_delivery', ?, 'pending', 0, 5, ?, ?, ?)`,
+  ).run(makeId('job'), hook.workspace_id, JSON.stringify({ deliveryId }), nowIso(), nowIso(), nowIso())
   return deliveryId
 }
 

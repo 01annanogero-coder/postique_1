@@ -64,9 +64,14 @@ export const api = {
   addCampaignRecipients: (id, recipients) =>
     apiRequest(`/api/campaigns/${id}/recipients`, { method: 'POST', body: { recipients } }),
   startCampaign: (id) => apiRequest(`/api/campaigns/${id}/start`, { method: 'POST', body: {} }),
+  scheduleCampaign: (id, scheduledAt) =>
+    apiRequest(`/api/campaigns/${id}/schedule`, { method: 'POST', body: { scheduled_at: scheduledAt } }),
   pauseCampaign: (id) => apiRequest(`/api/campaigns/${id}/pause`, { method: 'POST', body: {} }),
   resumeCampaign: (id) => apiRequest(`/api/campaigns/${id}/resume`, { method: 'POST', body: {} }),
   cancelCampaign: (id) => apiRequest(`/api/campaigns/${id}/cancel`, { method: 'POST', body: {} }),
+  queue: () => apiRequest('/api/queue'),
+  retryQueueJob: (id) => apiRequest(`/api/queue/jobs/${id}/retry`, { method: 'POST', body: {} }),
+  cancelQueueJob: (id) => apiRequest(`/api/queue/jobs/${id}/cancel`, { method: 'POST', body: {} }),
   appAuth: (params = '') => apiRequest(`/api/app-auth${params}`),
   updateAppAuthSettings: (data) => apiRequest('/api/app-auth/settings', { method: 'PATCH', body: data }),
   sendAppAuthLink: (id, data) => apiRequest(`/api/app-auth/users/${id}/magic-link`, { method: 'POST', body: data }),

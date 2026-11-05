@@ -224,6 +224,7 @@ Useful endpoints:
 | `POST` | `/v1/campaigns` | Create a BYOA campaign draft. |
 | `POST` | `/v1/campaigns/:id/recipients` | Append a recipient batch. |
 | `POST` | `/v1/campaigns/:id/start` | Start or resume campaign delivery. |
+| `POST` | `/v1/campaigns/:id/schedule` | Schedule a draft campaign for later. |
 
 Browser SDK: load `/sdk/postique.js` and use a **public** key. Public keys require allowed origins and at least one allowed published template.
 
@@ -270,7 +271,7 @@ GET /verify/v1/requests/vrf_...
 Authorization: Bearer pq_live_...
 ```
 
-The verification record contains only the email, template choice, metadata and redirect. It is single-use, expires after 30 minutes, and is purged after 24 hours. Repeat submissions are allowed; there is no `user_exists` wall.
+The verification record contains only the email, template choice, metadata and redirect. It is single-use, expires after 30 minutes, and is purged after 24 hours. Repeat submissions are allowed; there is no `user_exists` wall. A workspace webhook can subscribe to `verification.completed` if you prefer callbacks over polling.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -310,7 +311,7 @@ curl -X POST https://mail.example.com/v1/campaigns \
   }'
 ```
 
-Then `POST /v1/campaigns/:id/start`, or use **Campaigns** in the dashboard. The API also supports appending batches with `POST /v1/campaigns/:id/recipients`, so a large audience can be streamed in chunks rather than stored permanently.
+Then `POST /v1/campaigns/:id/start`, or use **Campaigns** in the dashboard. The API also supports appending batches with `POST /v1/campaigns/:id/recipients`, so a large audience can be streamed in chunks rather than stored permanently. Pass `scheduled_at` at creation time, or call `POST /v1/campaigns/:id/schedule`, to have the worker start a draft later.
 
 Current defaults are 50 recipients per batch and 100,000 recipients per campaign, configurable through `CAMPAIGN_*` environment variables. This is a single-node queue profile; for millions of messages per hour, replace SQLite with a distributed queue/database and run a worker fleet.
 
@@ -478,7 +479,10 @@ Widget events:
 - `postique:ready`
 - `postique:thread.opened`
 - `postique:reply.sent`
+- `postique:session.expired`
 - `postique:error`
+
+When the token expires, listen for `postique:session.expired`, mint a fresh token on your server and call `widget.setToken(nextToken)` (or update the `token` attribute). The widget also exposes `refresh()`.
 
 ```js
 document.querySelector('postique-inbox').addEventListener('postique:reply.sent', (event) => {
@@ -509,7 +513,7 @@ X-Postique-Delivery: whd_...
 X-Postique-Signature: sha256=<hex>
 ```
 
-Verify the signature against the raw request body using the webhook secret shown once at creation. Events: `message.sent`, `message.failed`, `message.bounced`, `message.complained`, `thread.reply_received`.
+Verify the signature against the raw request body using the webhook secret shown once at creation. Events: `message.sent`, `message.failed`, `message.bounced`, `message.complained`, `thread.reply_received`, `verification.completed`, `campaign.scheduled`, `campaign.started`, `campaign.paused`, `campaign.resumed`, `campaign.completed`, `campaign.cancelled`.
 
 ## Operations
 
@@ -553,6 +557,12 @@ then run:
 npm run worker
 ```
 
+### Queue operations
+
+The dashboard **Queue** page shows pending, running, completed and failed jobs for the workspace. Failed send, campaign, scheduled-start and webhook jobs can be retried; pending or failed jobs can be cancelled. Scheduled campaign starts are ordinary queue jobs and survive a process restart.
+
+A cancelled campaign marks pending recipients and unsent messages as cancelled. The worker checks the campaign state before delivering a queued message, so cancellation does not rely on deleting queue rows.
+
 ### Docker
 
 ```bash
@@ -577,7 +587,7 @@ npm run build
 npm test
 ```
 
-Unit tests cover password hashing, address parsing, threading subjects, FAQ matching, JWT claims and token tampering. The build is a Vite production build served by the Node server.
+Unit tests cover password hashing, address parsing, threading subjects, FAQ matching, JWT claims, token tampering, ephemeral verification records and unsubscribe tokens. The build is a Vite production build served by the Node server.
 
 ## Production checklist
 

@@ -259,9 +259,25 @@ export async function deliverMessage(messageId) {
         )
         .get(message.campaign_id).count
       if (remaining === 0) {
-        db.prepare(
-          "UPDATE campaigns SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ?",
-        ).run(sentAt, sentAt, message.campaign_id)
+        const completed = db
+          .prepare(
+            "UPDATE campaigns SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ? AND status = 'running'",
+          )
+          .run(sentAt, sentAt, message.campaign_id)
+        if (completed.changes) {
+          const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(message.campaign_id)
+          enqueueWebhookEvent(campaign.workspace_id, 'campaign.completed', {
+            campaign: {
+              id: campaign.id,
+              name: campaign.name,
+              status: campaign.status,
+              scheduledAt: campaign.scheduled_at || null,
+              startedAt: campaign.started_at || null,
+              completedAt: campaign.completed_at || null,
+              total: campaign.total || 0,
+            },
+          })
+        }
       }
     }
   }

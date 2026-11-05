@@ -104,7 +104,7 @@ export function createOutboundMessage({
   if (thread) {
     touchThread(thread.id, { snippet: text || '', unread: false })
   }
-  enqueue('send_message', { messageId: id })
+  enqueue('send_message', { messageId: id }, { workspaceId })
   return db.prepare('SELECT * FROM messages WHERE id = ?').get(id)
 }
 
